@@ -13,8 +13,10 @@ function escapeXml(value: string): string {
 // SSML <say-as interpret-as="characters"> spells out "HHL" clearly without
 // the unnaturally long pauses that manually comma-separating letters
 // ("H, H, L") caused — that made the whole opening line sound sluggish.
+// No <speak> wrapper — Twilio's <Say> rejected it (error 13520/12200):
+// <Say> is already the implicit root, SSML children go directly inside it.
 const OPENING_SCRIPT_SSML =
-  '<speak>Hi, this is <say-as interpret-as="characters">HHL</say-as> Credit calling with a payment reminder. Will payment be made today?</speak>';
+  'Hi, this is <say-as interpret-as="characters">HHL</say-as> Credit calling with a payment reminder. Will payment be made today?';
 
 function connectStreamTwiml(streamUrl: string, callId: string) {
   const xml =
@@ -30,7 +32,7 @@ function connectStreamTwiml(streamUrl: string, callId: string) {
 // trying to have the realtime AI improvise against an answering machine's
 // own prompts/beep is exactly what caused the mid-sentence cutoff bug.
 const VOICEMAIL_MESSAGE_SSML =
-  '<speak>Hi, this is an automated call from <say-as interpret-as="characters">HHL</say-as> Credit regarding a payment reminder. Please call us back at your convenience. Thank you.</speak>';
+  'Hi, this is an automated call from <say-as interpret-as="characters">HHL</say-as> Credit regarding a payment reminder. Please call us back at your convenience. Thank you.';
 
 function voicemailTwiml() {
   const xml = `<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="Polly.Amy-Generative">${VOICEMAIL_MESSAGE_SSML}</Say><Hangup/></Response>`;

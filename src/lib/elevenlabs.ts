@@ -71,6 +71,14 @@ export async function streamTextToSpeech(
       body: JSON.stringify({
         text,
         model_id: "eleven_multilingual_v2", // supports English/Mandarin
+        // Tuned against the user's real cloned voice sample — default
+        // settings sounded rougher/less natural.
+        voice_settings: {
+          stability: 0.5,
+          similarity_boost: 0.75,
+          style: 0,
+          use_speaker_boost: true,
+        },
       }),
     }
   );

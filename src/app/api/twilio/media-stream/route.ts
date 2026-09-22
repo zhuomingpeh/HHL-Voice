@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { buildSystemPrompt } from "@/lib/systemPrompt";
 import { REALTIME_TOOLS } from "@/lib/realtimeTools";
 import { CALL_OUTCOME_KEYS } from "@/lib/callOutcomes";
+import { streamTextToSpeech } from "@/lib/elevenlabs";
 import type { Prisma, CustomerRecord } from "@prisma/client";
 
 export const maxDuration = 300;
@@ -36,10 +37,47 @@ export async function GET() {
     let hardTimeout: ReturnType<typeof setTimeout> | null = null;
     const transcript: TranscriptEntry[] = [];
     const bufferedMedia: string[] = [];
+    let responseTextBuffer = "";
+    // Bumped on every barge-in; an in-flight TTS playback loop checks this
+    // and stops sending audio to Twilio if it's gone stale, so we don't
+    // keep talking over a customer who just started speaking.
+    let playbackGeneration = 0;
+    // Tracks the most recent speak() call so end_call can wait for the
+    // closing line to actually finish playing before hanging up, instead of
+    // a fixed guess — ElevenLabs streaming takes variable time per message.
+    let activeSpeak: Promise<void> = Promise.resolve();
 
     function logTranscript(role: string, text: string) {
       if (!text) return;
       transcript.push({ role, text, timestamp: new Date().toISOString() });
+    }
+
+    async function speak(text: string) {
+      if (!text.trim() || !streamSid) return;
+      const voiceId = process.env.ELEVENLABS_VOICE_ID;
+      if (!voiceId) {
+        console.error("[media-stream] ELEVENLABS_VOICE_ID is not set");
+        return;
+      }
+      logTranscript("assistant", text);
+
+      const myGeneration = playbackGeneration;
+      try {
+        const stream = await streamTextToSpeech(voiceId, text);
+        for await (const chunk of stream as unknown as AsyncIterable<Uint8Array>) {
+          if (myGeneration !== playbackGeneration) break; // barged in — stop playing
+          if (twilioWs.readyState !== WebSocket.OPEN) break;
+          twilioWs.send(
+            JSON.stringify({
+              event: "media",
+              streamSid,
+              media: { payload: Buffer.from(chunk).toString("base64") },
+            })
+          );
+        }
+      } catch (err) {
+        console.error("[media-stream] ElevenLabs TTS failed", err);
+      }
     }
 
     async function finalizeCall(outcome: string | null, summary: string | null) {
@@ -97,24 +135,26 @@ export async function GET() {
                 : "ANSWERED";
             const summary = typeof args.summary === "string" ? args.summary : null;
             await finalizeCall(outcome, summary);
-            // Give the model's final spoken goodbye time to actually play
-            // out over the Twilio stream before we hang up — closing the
-            // socket immediately would cut the audio off mid-sentence.
-            // <Connect><Stream> ties the call's fate to this connection, so
-            // closing it is what actually ends the phone call; finalizeCall
-            // above only updates our own records.
-            setTimeout(() => {
-              try {
-                openaiWs?.close();
-              } catch {
-                // already closed
-              }
-              try {
-                twilioWs.close();
-              } catch {
-                // already closed
-              }
-            }, 6000);
+            // Wait for the closing line's ElevenLabs playback to actually
+            // finish before hanging up — <Connect><Stream> ties the call's
+            // fate to this connection, so closing it is what ends the
+            // phone call; finalizeCall above only updates our own records.
+            activeSpeak
+              .catch(() => {})
+              .then(() => {
+                setTimeout(() => {
+                  try {
+                    openaiWs?.close();
+                  } catch {
+                    // already closed
+                  }
+                  try {
+                    twilioWs.close();
+                  } catch {
+                    // already closed
+                  }
+                }, 500); // small buffer for the last audio packet to flush through Twilio
+              });
             break;
           }
           default:
@@ -159,7 +199,11 @@ export async function GET() {
             session: {
               type: "realtime",
               model: "gpt-realtime",
-              output_modalities: ["audio"],
+              // Text only — OpenAI still does the listening/understanding
+              // and all tool-calling, but speaking is handled by ElevenLabs
+              // (the user's cloned voice) instead of gpt-realtime's own
+              // built-in voice. See speak() above.
+              output_modalities: ["text"],
               audio: {
                 input: {
                   format: { type: "audio/pcmu" },
@@ -169,7 +213,6 @@ export async function GET() {
                   turn_detection: { type: "server_vad", silence_duration_ms: 900 },
                   transcription: { model: "whisper-1" },
                 },
-                output: { format: { type: "audio/pcmu" }, voice: "marin" },
               },
               instructions: buildSystemPrompt({
                 name: record!.name,
@@ -202,22 +245,24 @@ export async function GET() {
 
         // Temporary: the GA Realtime wire protocol isn't fully verified yet
         // (it changed meaningfully from the widely-documented 2024 beta) —
-        // log every event type except the noisy per-chunk audio delta so we
+        // log every event type except the noisy per-chunk text delta so we
         // can confirm/correct event names against real traffic.
-        if (event.type && event.type !== "response.output_audio.delta") {
+        if (event.type && event.type !== "response.output_text.delta") {
           console.log("[media-stream] openai event:", event.type);
         }
 
         switch (event.type) {
-          case "response.output_audio.delta": {
-            const delta = event.delta as string | undefined;
-            if (streamSid && delta) {
-              twilioWs.send(JSON.stringify({ event: "media", streamSid, media: { payload: delta } }));
-            }
+          case "response.output_text.delta": {
+            responseTextBuffer += (event.delta as string | undefined) ?? "";
             break;
           }
-          case "response.output_audio_transcript.done": {
-            logTranscript("assistant", (event.transcript as string) ?? "");
+          case "response.output_text.done": {
+            const finalText =
+              (event.text as string | undefined) ?? responseTextBuffer;
+            responseTextBuffer = "";
+            activeSpeak = speak(finalText).catch((err) =>
+              console.error("[media-stream] speak() failed", err)
+            );
             break;
           }
           case "conversation.item.input_audio_transcription.completed": {
@@ -225,8 +270,10 @@ export async function GET() {
             break;
           }
           case "input_audio_buffer.speech_started": {
-            // Barge-in: clear whatever Twilio has queued to play so the
-            // customer doesn't keep hearing the assistant talk over them.
+            // Barge-in: stop any in-flight ElevenLabs playback and clear
+            // whatever Twilio has queued, so the customer doesn't keep
+            // hearing the assistant talk over them.
+            playbackGeneration++;
             if (streamSid) {
               twilioWs.send(JSON.stringify({ event: "clear", streamSid }));
             }

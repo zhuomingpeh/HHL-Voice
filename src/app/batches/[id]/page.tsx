@@ -1,7 +1,9 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { BatchStatusControls } from "@/components/BatchStatusControls";
+import { CallButton } from "@/components/CallButton";
 import { callOutcomeLabel } from "@/lib/callOutcomes";
+import { getTwilioConfig } from "@/lib/twilio";
 
 export default async function BatchDetailPage({
   params,
@@ -23,6 +25,8 @@ export default async function BatchDetailPage({
   if (!batch) notFound();
 
   const invalidRecords = batch.records.filter((r) => !r.isValid);
+  const twilioConfigured = getTwilioConfig() !== null;
+  const twilioSignatureVerified = Boolean(process.env.TWILIO_AUTH_TOKEN);
 
   return (
     <div className="flex flex-col gap-6">
@@ -39,8 +43,17 @@ export default async function BatchDetailPage({
 
       {batch.status === "DRAFT" && (
         <p className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-          Note: starting a batch currently only marks it as running. Twilio call
-          dispatch is wired up in a later milestone — no calls will be placed yet.
+          Note: starting a batch only marks it as running — it does not dial
+          anyone automatically yet. Use &quot;Place real call&quot; on individual
+          rows below to test calling one customer at a time.
+        </p>
+      )}
+
+      {twilioConfigured && !twilioSignatureVerified && (
+        <p className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+          TWILIO_AUTH_TOKEN is not set — Twilio webhook requests are not being
+          signature-verified. Fine for a first local/test call, but set it
+          before relying on this for real calling.
         </p>
       )}
 
@@ -107,6 +120,7 @@ export default async function BatchDetailPage({
               <th className="px-4 py-2 font-normal">Amount</th>
               <th className="px-4 py-2 font-normal">Valid</th>
               <th className="px-4 py-2 font-normal">Last call outcome</th>
+              <th className="px-4 py-2 font-normal">Call</th>
             </tr>
           </thead>
           <tbody>
@@ -129,6 +143,13 @@ export default async function BatchDetailPage({
                   )}
                 </td>
                 <td className="px-4 py-2">{callOutcomeLabel(r.calls[0]?.outcome)}</td>
+                <td className="px-4 py-2">
+                  {r.isValid && twilioConfigured ? (
+                    <CallButton customerRecordId={r.id} />
+                  ) : (
+                    <span className="text-neutral-400">—</span>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>

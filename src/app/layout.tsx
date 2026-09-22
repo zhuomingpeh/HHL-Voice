@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { LogoutButton } from "@/components/LogoutButton";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -38,6 +39,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             <a href="/search" className="text-neutral-600 hover:text-neutral-900">
               Search
             </a>
+            <span className="ml-auto">
+              <LogoutButton />
+            </span>
           </nav>
         </header>
         <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-8">{children}</main>

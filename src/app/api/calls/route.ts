@@ -46,13 +46,16 @@ export async function POST(req: NextRequest) {
       record: true,
       recordingStatusCallback: recordingStatusCallbackUrl,
       recordingStatusCallbackEvent: ["completed"],
-      // machineDetection was tried (both "DetectMessageEnd" and "Enable")
-      // and dropped for now — even "Enable" added noticeable delay before a
-      // human ever heard anything, since Twilio won't call the voice
-      // webhook until it finishes analyzing the first moment of audio.
-      // Given how often calls are answered by a human, that tradeoff wasn't
-      // worth it. voice/route.ts still handles AnsweredBy defensively if
-      // this gets re-enabled later.
+      // Re-enabled after a live test hit voicemail with AMD off: with no
+      // way to tell a machine from a human, the live conversational AI just
+      // tried (and failed) to "talk" to the voicemail greeting and got
+      // stuck for ~2 minutes instead of leaving voice/route.ts's dedicated
+      // one-way message. Was disabled earlier for latency, but that same
+      // commit also moved the server to sin1 (Singapore) — the two changes
+      // were never isolated, so it's unclear how much of that delay was
+      // actually AMD vs. cross-Pacific latency the region fix addresses.
+      // "Enable" (not "DetectMessageEnd") for the faster of the two modes.
+      machineDetection: "Enable",
     });
 
     const updated = await prisma.call.update({

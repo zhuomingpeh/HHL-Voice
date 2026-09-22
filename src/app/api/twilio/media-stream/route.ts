@@ -131,6 +131,24 @@ export async function GET() {
                 : "ANSWERED";
             const summary = typeof args.summary === "string" ? args.summary : null;
             await finalizeCall(outcome, summary);
+            // Give the model's final spoken goodbye time to actually play
+            // out over the Twilio stream before we hang up — closing the
+            // socket immediately would cut the audio off mid-sentence.
+            // <Connect><Stream> ties the call's fate to this connection, so
+            // closing it is what actually ends the phone call; finalizeCall
+            // above only updates our own records.
+            setTimeout(() => {
+              try {
+                openaiWs?.close();
+              } catch {
+                // already closed
+              }
+              try {
+                twilioWs.close();
+              } catch {
+                // already closed
+              }
+            }, 6000);
             break;
           }
           default:
@@ -177,7 +195,11 @@ export async function GET() {
               model: "gpt-realtime",
               output_modalities: ["audio"],
               audio: {
-                input: { format: { type: "audio/pcmu" }, turn_detection: { type: "server_vad" } },
+                input: {
+                  format: { type: "audio/pcmu" },
+                  turn_detection: { type: "server_vad" },
+                  transcription: { model: "whisper-1" },
+                },
                 output: { format: { type: "audio/pcmu" }, voice: "marin" },
               },
               instructions: buildSystemPrompt({
@@ -206,6 +228,14 @@ export async function GET() {
           event = JSON.parse(raw.toString());
         } catch {
           return;
+        }
+
+        // Temporary: the GA Realtime wire protocol isn't fully verified yet
+        // (it changed meaningfully from the widely-documented 2024 beta) —
+        // log every event type except the noisy per-chunk audio delta so we
+        // can confirm/correct event names against real traffic.
+        if (event.type && event.type !== "response.output_audio.delta") {
+          console.log("[media-stream] openai event:", event.type);
         }
 
         switch (event.type) {

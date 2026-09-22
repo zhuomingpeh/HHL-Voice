@@ -10,18 +10,14 @@ function escapeXml(value: string): string {
 // plays this immediately on answer, which also buys time in the background
 // for the OpenAI Realtime connection to finish setting up before it
 // actually needs to listen for a reply.
-// SSML <say-as interpret-as="characters"> spells out "HHL" clearly without
-// the unnaturally long pauses that manually comma-separating letters
-// ("H, H, L") caused — that made the whole opening line sound sluggish.
-// No <speak> wrapper — Twilio's <Say> rejected it (error 13520/12200):
-// <Say> is already the implicit root, SSML children go directly inside it.
-const OPENING_SCRIPT_SSML =
-  'Hi, this is <say-as interpret-as="characters">HHL</say-as> Credit calling with a payment reminder. Will payment be made today?';
+// Plain "HHL" (no letter-spelling SSML) — spelling it out was judged too
+// slow-sounding; a plain acronym reads fine.
+const OPENING_SCRIPT = "Hi this is HHL Credit, your payment is due today. Will payment be made today?";
 
 function connectStreamTwiml(streamUrl: string, callId: string) {
   const xml =
     `<?xml version="1.0" encoding="UTF-8"?><Response>` +
-    `<Say voice="Polly.Amy-Generative">${OPENING_SCRIPT_SSML}</Say>` +
+    `<Say voice="Polly.Amy-Generative">${escapeXml(OPENING_SCRIPT)}</Say>` +
     `<Connect><Stream url="${escapeXml(streamUrl)}">` +
     `<Parameter name="callId" value="${escapeXml(callId)}" /></Stream></Connect></Response>`;
   return new NextResponse(xml, { headers: { "Content-Type": "text/xml" } });
@@ -31,11 +27,11 @@ function connectStreamTwiml(streamUrl: string, callId: string) {
 // identity with. Left as a one-way message, not a live AI conversation:
 // trying to have the realtime AI improvise against an answering machine's
 // own prompts/beep is exactly what caused the mid-sentence cutoff bug.
-const VOICEMAIL_MESSAGE_SSML =
-  'Hi, this is an automated call from <say-as interpret-as="characters">HHL</say-as> Credit regarding a payment reminder. Please call us back at your convenience. Thank you.';
+const VOICEMAIL_MESSAGE =
+  "Hi, this is an automated call from HHL Credit regarding a payment reminder. Please call us back at your convenience. Thank you.";
 
 function voicemailTwiml() {
-  const xml = `<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="Polly.Amy-Generative">${VOICEMAIL_MESSAGE_SSML}</Say><Hangup/></Response>`;
+  const xml = `<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="Polly.Amy-Generative">${escapeXml(VOICEMAIL_MESSAGE)}</Say><Hangup/></Response>`;
   return new NextResponse(xml, { headers: { "Content-Type": "text/xml" } });
 }
 

@@ -31,6 +31,8 @@ export function callOutcomeLabel(key: string | null | undefined): string {
 // an enum, so the list can evolve freely.
 export const CALLBACK_REASONS: CallOutcomeDef[] = [
   { key: "NOT_PAYING_TODAY", label: "Customer did not confirm payment today — left a message" },
+  { key: "ALREADY_PAID_TO_VERIFY", label: "Customer says already paid — verify" },
+  { key: "CUSTOMER_UPSET_OR_MISUNDERSTANDING", label: "Customer was upset or there may be a misunderstanding" },
   { key: "REQUESTED_STAFF", label: "Customer requested a staff member" },
   { key: "WANTS_NEGOTIATION", label: "Customer wants to negotiate" },
   { key: "WANTS_INSTALMENTS", label: "Customer requested instalments / alternative arrangement" },

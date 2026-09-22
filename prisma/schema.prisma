@@ -1,18 +1,19 @@
 // Prisma schema for the AI Debt Reminder Calling System.
 //
-// Local dev uses SQLite (zero-config, no credentials required).
-// For production on Vercel, switch the datasource below to:
-//   provider = "postgresql"
-//   url      = env("DATABASE_URL")
-// and point DATABASE_URL at Vercel Postgres / Neon.
+// Postgres (Neon, via the Vercel Marketplace integration). Local dev uses
+// Neon's "development" branch (pulled into .env.local by `vercel env pull` /
+// `vercel link`); production uses the "production" branch, set as Vercel
+// project env vars. directUrl (unpooled) is used for migrations, since DDL
+// over Neon's pooled/PgBouncer connection is unreliable.
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DATABASE_URL_UNPOOLED")
 }
 
 enum BatchStatus {

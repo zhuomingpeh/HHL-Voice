@@ -21,29 +21,35 @@ export function getTwilioClient(config: TwilioConfig) {
   return Twilio(config.apiKeySid, config.apiKeySecret, { accountSid: config.accountSid });
 }
 
-// Builds an absolute URL Twilio can call back to, appending the Vercel
-// Protection Bypass param so it isn't blocked by Deployment Protection.
-// Only ever used for Twilio webhook URLs — never for dashboard links.
+// Builds an absolute URL Twilio can call back to. Uses TWILIO_WEBHOOK_BASE_URL
+// — a dedicated domain (on a non-production git branch) that's exempted from
+// Vercel Deployment Protection, since Vercel's protection can't be satisfied
+// on the Media Streams WebSocket handshake at all (Twilio's <Stream> url
+// doesn't support query params, and there's no way to attach a custom
+// header either). Security for these routes comes entirely from Twilio's
+// own request-signature validation (isValidTwilioRequest below) instead —
+// this domain serves no dashboard pages, only /api/twilio/* routes.
 export function buildTwilioWebhookUrl(path: string, params: Record<string, string>): string {
-  const base = process.env.APP_BASE_URL;
-  if (!base) throw new Error("APP_BASE_URL is not set");
+  const base = process.env.TWILIO_WEBHOOK_BASE_URL;
+  if (!base) throw new Error("TWILIO_WEBHOOK_BASE_URL is not set");
 
   const url = new URL(path, base);
   for (const [key, value] of Object.entries(params)) {
     url.searchParams.set(key, value);
   }
-
-  const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
-  if (bypass) url.searchParams.set("x-vercel-protection-bypass", bypass);
-
   return url.toString();
 }
 
-// Same idea as buildTwilioWebhookUrl but for the wss:// Media Streams URL
-// Twilio's <Connect><Stream> opens a live, bidirectional connection to.
-export function buildTwilioMediaStreamUrl(path: string, params: Record<string, string>): string {
-  const httpsUrl = buildTwilioWebhookUrl(path, params);
-  return httpsUrl.replace(/^https:\/\//, "wss://").replace(/^http:\/\//, "ws://");
+// Same base domain, but as a bare wss:// URL with NO query string — Twilio's
+// <Stream> url attribute doesn't support query params at all. Anything the
+// stream handler needs (e.g. callId) must go through <Parameter> elements
+// instead, delivered in the "start" WebSocket message.
+export function buildTwilioMediaStreamUrl(path: string): string {
+  const base = process.env.TWILIO_WEBHOOK_BASE_URL;
+  if (!base) throw new Error("TWILIO_WEBHOOK_BASE_URL is not set");
+
+  const url = new URL(path, base);
+  return url.toString().replace(/^https:\/\//, "wss://").replace(/^http:\/\//, "ws://");
 }
 
 // Validates that an incoming request genuinely came from Twilio. Requires

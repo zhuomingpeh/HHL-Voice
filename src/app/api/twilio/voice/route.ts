@@ -6,8 +6,10 @@ function escapeXml(value: string): string {
   return value.replace(/&/g, "&amp;");
 }
 
-function connectStreamTwiml(streamUrl: string) {
-  const xml = `<?xml version="1.0" encoding="UTF-8"?><Response><Connect><Stream url="${escapeXml(streamUrl)}" /></Connect></Response>`;
+function connectStreamTwiml(streamUrl: string, callId: string) {
+  const xml =
+    `<?xml version="1.0" encoding="UTF-8"?><Response><Connect><Stream url="${escapeXml(streamUrl)}">` +
+    `<Parameter name="callId" value="${escapeXml(callId)}" /></Stream></Connect></Response>`;
   return new NextResponse(xml, { headers: { "Content-Type": "text/xml" } });
 }
 
@@ -37,6 +39,6 @@ export async function POST(req: NextRequest) {
       // fail the call itself over a bookkeeping miss.
     });
 
-  const streamUrl = buildTwilioMediaStreamUrl("/api/twilio/media-stream", { callId });
-  return connectStreamTwiml(streamUrl);
+  const streamUrl = buildTwilioMediaStreamUrl("/api/twilio/media-stream");
+  return connectStreamTwiml(streamUrl, callId);
 }

@@ -3,7 +3,6 @@ import WebSocket from "ws";
 import { prisma } from "@/lib/prisma";
 import { buildSystemPrompt } from "@/lib/systemPrompt";
 import { REALTIME_TOOLS } from "@/lib/realtimeTools";
-import { namesReasonablyMatch } from "@/lib/nameMatch";
 import { CALL_OUTCOME_KEYS } from "@/lib/callOutcomes";
 import type { Prisma, CustomerRecord } from "@prisma/client";
 
@@ -78,39 +77,6 @@ export async function GET() {
 
       try {
         switch (name) {
-          case "verify_identity": {
-            const providedName = typeof args.providedName === "string" ? args.providedName : "";
-            const matches = namesReasonablyMatch(providedName, record.name);
-            if (matches) {
-              await prisma.call.update({ where: { id: activeCallId }, data: { identityConfirmed: true } });
-            }
-            result = { matches };
-            break;
-          }
-          case "record_promise_to_pay": {
-            const raw = typeof args.customerStatementVerbatim === "string" ? args.customerStatementVerbatim : null;
-            const normalizedRaw = typeof args.normalizedDateTime === "string" ? args.normalizedDateTime : null;
-            const normalized = normalizedRaw ? new Date(normalizedRaw) : null;
-            await prisma.call.update({
-              where: { id: activeCallId },
-              data: {
-                promiseToPayRaw: raw,
-                promiseToPayNormalized: normalized && !isNaN(normalized.getTime()) ? normalized : null,
-              },
-            });
-            break;
-          }
-          case "mark_already_paid": {
-            await prisma.call.update({ where: { id: activeCallId }, data: { outcome: "ALREADY_PAID" } });
-            break;
-          }
-          case "record_payment_instructions_given": {
-            await prisma.call.update({
-              where: { id: activeCallId },
-              data: { paymentInstructionsRequested: true, paymentInstructionsSent: true },
-            });
-            break;
-          }
           case "create_callback_task": {
             const reason = typeof args.reason === "string" ? args.reason : "OUT_OF_SCOPE";
             const summary = typeof args.summary === "string" ? args.summary : null;
@@ -211,9 +177,10 @@ export async function GET() {
             },
           })
         );
-        // Nudge the model to speak first (it's an outbound call — the
-        // customer just picked up and is waiting to hear from us).
-        ws.send(JSON.stringify({ type: "response.create" }));
+        // No "speak first" nudge here — the opening line and question were
+        // already played as fixed Twilio <Say> TwiML before this connection
+        // was made. The model's first turn should be reacting to whatever
+        // the customer says in response to that.
 
         // Flush any caller audio that arrived while we were still connecting.
         for (const payload of bufferedMedia) {

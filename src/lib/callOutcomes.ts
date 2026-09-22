@@ -30,6 +30,7 @@ export function callOutcomeLabel(key: string | null | undefined): string {
 // Callback task reasons (spec section 13). Same rationale — plain data, not
 // an enum, so the list can evolve freely.
 export const CALLBACK_REASONS: CallOutcomeDef[] = [
+  { key: "NOT_PAYING_TODAY", label: "Customer did not confirm payment today — left a message" },
   { key: "REQUESTED_STAFF", label: "Customer requested a staff member" },
   { key: "WANTS_NEGOTIATION", label: "Customer wants to negotiate" },
   { key: "WANTS_INSTALMENTS", label: "Customer requested instalments / alternative arrangement" },

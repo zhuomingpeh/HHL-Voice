@@ -6,9 +6,17 @@ function escapeXml(value: string): string {
   return value.replace(/&/g, "&amp;");
 }
 
+// Scripted, deterministic — not left to the AI to say. Twilio's own TTS
+// plays this immediately on answer, which also buys time in the background
+// for the OpenAI Realtime connection to finish setting up before it
+// actually needs to listen for a reply.
+const OPENING_SCRIPT = "Hi, this is H, H, L Credit calling with a payment reminder. Will payment be made today?";
+
 function connectStreamTwiml(streamUrl: string, callId: string) {
   const xml =
-    `<?xml version="1.0" encoding="UTF-8"?><Response><Connect><Stream url="${escapeXml(streamUrl)}">` +
+    `<?xml version="1.0" encoding="UTF-8"?><Response>` +
+    `<Say voice="Polly.Amy-Generative">${escapeXml(OPENING_SCRIPT)}</Say>` +
+    `<Connect><Stream url="${escapeXml(streamUrl)}">` +
     `<Parameter name="callId" value="${escapeXml(callId)}" /></Stream></Connect></Response>`;
   return new NextResponse(xml, { headers: { "Content-Type": "text/xml" } });
 }
@@ -43,8 +51,8 @@ export async function POST(req: NextRequest) {
 
   // Deterministic voicemail detection (spec: needs "a voice mail protocol")
   // — Twilio's Answering Machine Detection, requested with
-  // machineDetection: "DetectMessageEnd" in /api/calls, delivers its result
-  // as AnsweredBy on this very request rather than a separate callback.
+  // machineDetection: "Enable" in /api/calls, delivers its result as
+  // AnsweredBy on this very request rather than a separate callback.
   const answeredBy = params.AnsweredBy;
   const isMachine = typeof answeredBy === "string" && answeredBy.startsWith("machine");
 

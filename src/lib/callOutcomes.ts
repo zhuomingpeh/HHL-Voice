@@ -10,6 +10,7 @@ export interface CallOutcomeDef {
 export const CALL_OUTCOMES: CallOutcomeDef[] = [
   { key: "ANSWERED", label: "Answered" },
   { key: "NO_ANSWER", label: "No Answer" },
+  { key: "LEFT_VOICEMAIL", label: "Left Voicemail" },
   { key: "PROMISE_TO_PAY", label: "Promise to Pay" },
   { key: "ALREADY_PAID", label: "Already Paid" },
   { key: "CALLBACK_REQUIRED", label: "Callback Required" },

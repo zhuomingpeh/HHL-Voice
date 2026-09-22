@@ -13,6 +13,18 @@ function connectStreamTwiml(streamUrl: string, callId: string) {
   return new NextResponse(xml, { headers: { "Content-Type": "text/xml" } });
 }
 
+// Fully generic — no account specifics, since there's no one to verify
+// identity with. Left as a one-way message, not a live AI conversation:
+// trying to have the realtime AI improvise against an answering machine's
+// own prompts/beep is exactly what caused the mid-sentence cutoff bug.
+const VOICEMAIL_MESSAGE =
+  "Hi, this is an automated call from H, H, L Credit regarding a payment reminder. Please call us back at your convenience. Thank you.";
+
+function voicemailTwiml() {
+  const xml = `<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="Polly.Amy-Generative">${VOICEMAIL_MESSAGE}</Say><Hangup/></Response>`;
+  return new NextResponse(xml, { headers: { "Content-Type": "text/xml" } });
+}
+
 export async function POST(req: NextRequest) {
   const formData = await req.formData();
   const params: Record<string, string> = {};
@@ -29,15 +41,28 @@ export async function POST(req: NextRequest) {
     return new NextResponse("Missing callId", { status: 400 });
   }
 
+  // Deterministic voicemail detection (spec: needs "a voice mail protocol")
+  // — Twilio's Answering Machine Detection, requested with
+  // machineDetection: "DetectMessageEnd" in /api/calls, delivers its result
+  // as AnsweredBy on this very request rather than a separate callback.
+  const answeredBy = params.AnsweredBy;
+  const isMachine = typeof answeredBy === "string" && answeredBy.startsWith("machine");
+
   await prisma.call
     .update({
       where: { id: callId },
-      data: { startTime: new Date(), wasAnswered: true },
+      data: isMachine
+        ? { startTime: new Date(), wasAnswered: false, outcome: "LEFT_VOICEMAIL" }
+        : { startTime: new Date(), wasAnswered: true },
     })
     .catch(() => {
       // Call row may not exist if this webhook was hit out of band — don't
       // fail the call itself over a bookkeeping miss.
     });
+
+  if (isMachine) {
+    return voicemailTwiml();
+  }
 
   const streamUrl = buildTwilioMediaStreamUrl("/api/twilio/media-stream");
   return connectStreamTwiml(streamUrl, callId);

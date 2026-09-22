@@ -1,5 +1,17 @@
 import { prisma } from "@/lib/prisma";
 import { UploadBatchForm } from "@/components/UploadBatchForm";
+import { getTwilioClient, getTwilioConfig } from "@/lib/twilio";
+
+async function fetchTwilioBalance(): Promise<{ balance: string; currency: string } | null> {
+  const config = getTwilioConfig();
+  if (!config) return null;
+  try {
+    const balance = await getTwilioClient(config).balance.fetch();
+    return { balance: balance.balance, currency: balance.currency };
+  } catch {
+    return null;
+  }
+}
 
 function statusBadge(status: string) {
   const colors: Record<string, string> = {
@@ -17,12 +29,28 @@ function statusBadge(status: string) {
 }
 
 export default async function DashboardPage() {
-  const batches = await prisma.batch.findMany({
-    orderBy: { createdAt: "desc" },
-  });
+  const [batches, twilioBalance] = await Promise.all([
+    prisma.batch.findMany({ orderBy: { createdAt: "desc" } }),
+    fetchTwilioBalance(),
+  ]);
 
   return (
     <div className="flex flex-col gap-6">
+      <div className="flex gap-4">
+        <div className="rounded-lg border border-neutral-200 bg-white p-3 text-sm">
+          <p className="text-neutral-500">Twilio balance</p>
+          <p className="text-xl font-semibold">
+            {twilioBalance ? `${twilioBalance.currency} ${twilioBalance.balance}` : "—"}
+          </p>
+        </div>
+        <div className="rounded-lg border border-neutral-200 bg-white p-3 text-sm">
+          <p className="text-neutral-500">OpenAI usage</p>
+          <p className="text-sm text-neutral-400">
+            Not available — needs a separate Admin API key (Costs API), not the regular project key.
+          </p>
+        </div>
+      </div>
+
       <UploadBatchForm />
 
       <div className="rounded-lg border border-neutral-200 bg-white">

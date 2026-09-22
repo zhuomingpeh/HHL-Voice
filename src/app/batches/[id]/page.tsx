@@ -120,6 +120,7 @@ export default async function BatchDetailPage({
               <th className="px-4 py-2 font-normal">Amount</th>
               <th className="px-4 py-2 font-normal">Valid</th>
               <th className="px-4 py-2 font-normal">Last call outcome</th>
+              <th className="px-4 py-2 font-normal">Promise to pay</th>
               <th className="px-4 py-2 font-normal">Call</th>
             </tr>
           </thead>
@@ -143,6 +144,17 @@ export default async function BatchDetailPage({
                   )}
                 </td>
                 <td className="px-4 py-2">{callOutcomeLabel(r.calls[0]?.outcome)}</td>
+                <td className="px-4 py-2">
+                  {r.calls[0]?.promiseToPayRaw ? (
+                    <span title={r.calls[0].promiseToPayRaw}>
+                      {r.calls[0].promiseToPayNormalized
+                        ? r.calls[0].promiseToPayNormalized.toLocaleDateString()
+                        : r.calls[0].promiseToPayRaw}
+                    </span>
+                  ) : (
+                    <span className="text-neutral-400">—</span>
+                  )}
+                </td>
                 <td className="px-4 py-2">
                   {r.isValid && twilioConfigured ? (
                     <CallButton customerRecordId={r.id} />

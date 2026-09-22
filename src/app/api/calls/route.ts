@@ -40,10 +40,13 @@ export async function POST(req: NextRequest) {
       statusCallback: statusCallbackUrl,
       statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
       statusCallbackMethod: "POST",
-      // Detect voicemail deterministically (waits for the greeting to end)
-      // rather than letting the AI guess mid-conversation — Twilio passes
-      // the result as `AnsweredBy` on the voice webhook request itself.
-      machineDetection: "DetectMessageEnd",
+      // Detect voicemail deterministically rather than letting the AI guess
+      // mid-conversation — Twilio passes the result as `AnsweredBy` on the
+      // voice webhook request itself. "Enable" (not "DetectMessageEnd")
+      // trades a little precision at the tail end of a machine greeting for
+      // much less added latency before a human hears anything — most calls
+      // are answered by a human, and that latency was directly noticeable.
+      machineDetection: "Enable",
     });
 
     const updated = await prisma.call.update({

@@ -39,6 +39,13 @@ export function buildTwilioWebhookUrl(path: string, params: Record<string, strin
   return url.toString();
 }
 
+// Same idea as buildTwilioWebhookUrl but for the wss:// Media Streams URL
+// Twilio's <Connect><Stream> opens a live, bidirectional connection to.
+export function buildTwilioMediaStreamUrl(path: string, params: Record<string, string>): string {
+  const httpsUrl = buildTwilioWebhookUrl(path, params);
+  return httpsUrl.replace(/^https:\/\//, "wss://").replace(/^http:\/\//, "ws://");
+}
+
 // Validates that an incoming request genuinely came from Twilio. Requires
 // TWILIO_AUTH_TOKEN (the Account Auth Token — NOT the API Key secret, which
 // isn't usable for signature validation). Until that's set, this logs a

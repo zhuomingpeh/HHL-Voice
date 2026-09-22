@@ -115,6 +115,9 @@ model Call {
 
   errorMessage String?
 
+  recordingUrl        String? // Twilio recording media URL (set once recordingStatusCallback fires)
+  recordingDurationSec Int?
+
   callbackTasks CallbackTask[]
 
   createdAt DateTime @default(now())

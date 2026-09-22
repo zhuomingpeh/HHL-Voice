@@ -31,6 +31,7 @@ export async function POST(req: NextRequest) {
 
   const voiceUrl = buildTwilioWebhookUrl("/api/twilio/voice", { callId: call.id });
   const statusCallbackUrl = buildTwilioWebhookUrl("/api/twilio/status", { callId: call.id });
+  const recordingStatusCallbackUrl = buildTwilioWebhookUrl("/api/twilio/recording", { callId: call.id });
 
   try {
     const twilioCall = await getTwilioClient(config).calls.create({
@@ -40,6 +41,11 @@ export async function POST(req: NextRequest) {
       statusCallback: statusCallbackUrl,
       statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
       statusCallbackMethod: "POST",
+      // Well within Twilio's 10,000 free storage-minutes/month at our
+      // current test volume — revisit if call volume ever gets real.
+      record: true,
+      recordingStatusCallback: recordingStatusCallbackUrl,
+      recordingStatusCallbackEvent: ["completed"],
       // machineDetection was tried (both "DetectMessageEnd" and "Enable")
       // and dropped for now — even "Enable" added noticeable delay before a
       // human ever heard anything, since Twilio won't call the voice

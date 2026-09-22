@@ -56,7 +56,10 @@ export function UploadBatchForm() {
     <div className="rounded-lg border border-neutral-200 bg-white p-4">
       <h2 className="mb-2 font-medium">Upload today&apos;s calling batch</h2>
       <p className="mb-3 text-sm text-neutral-500">
-        CSV must include columns: Name, Contact Number, Due Date, Remarks.
+        CSV must include columns: Name, Contact Number, Due Date, Remarks.{" "}
+        <a href="/calling-batch-template.csv" download className="font-medium text-neutral-900 underline">
+          Download CSV template
+        </a>
       </p>
       <form onSubmit={handleSubmit} className="flex items-center gap-3">
         <input

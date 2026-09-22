@@ -10,12 +10,16 @@ function escapeXml(value: string): string {
 // plays this immediately on answer, which also buys time in the background
 // for the OpenAI Realtime connection to finish setting up before it
 // actually needs to listen for a reply.
-const OPENING_SCRIPT = "Hi, this is H, H, L Credit calling with a payment reminder. Will payment be made today?";
+// SSML <say-as interpret-as="characters"> spells out "HHL" clearly without
+// the unnaturally long pauses that manually comma-separating letters
+// ("H, H, L") caused — that made the whole opening line sound sluggish.
+const OPENING_SCRIPT_SSML =
+  '<speak>Hi, this is <say-as interpret-as="characters">HHL</say-as> Credit calling with a payment reminder. Will payment be made today?</speak>';
 
 function connectStreamTwiml(streamUrl: string, callId: string) {
   const xml =
     `<?xml version="1.0" encoding="UTF-8"?><Response>` +
-    `<Say voice="Polly.Amy-Generative">${escapeXml(OPENING_SCRIPT)}</Say>` +
+    `<Say voice="Polly.Amy-Generative">${OPENING_SCRIPT_SSML}</Say>` +
     `<Connect><Stream url="${escapeXml(streamUrl)}">` +
     `<Parameter name="callId" value="${escapeXml(callId)}" /></Stream></Connect></Response>`;
   return new NextResponse(xml, { headers: { "Content-Type": "text/xml" } });
@@ -25,11 +29,11 @@ function connectStreamTwiml(streamUrl: string, callId: string) {
 // identity with. Left as a one-way message, not a live AI conversation:
 // trying to have the realtime AI improvise against an answering machine's
 // own prompts/beep is exactly what caused the mid-sentence cutoff bug.
-const VOICEMAIL_MESSAGE =
-  "Hi, this is an automated call from H, H, L Credit regarding a payment reminder. Please call us back at your convenience. Thank you.";
+const VOICEMAIL_MESSAGE_SSML =
+  '<speak>Hi, this is an automated call from <say-as interpret-as="characters">HHL</say-as> Credit regarding a payment reminder. Please call us back at your convenience. Thank you.</speak>';
 
 function voicemailTwiml() {
-  const xml = `<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="Polly.Amy-Generative">${VOICEMAIL_MESSAGE}</Say><Hangup/></Response>`;
+  const xml = `<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="Polly.Amy-Generative">${VOICEMAIL_MESSAGE_SSML}</Say><Hangup/></Response>`;
   return new NextResponse(xml, { headers: { "Content-Type": "text/xml" } });
 }
 

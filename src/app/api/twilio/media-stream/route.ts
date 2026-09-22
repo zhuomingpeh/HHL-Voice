@@ -163,7 +163,10 @@ export async function GET() {
               audio: {
                 input: {
                   format: { type: "audio/pcmu" },
-                  turn_detection: { type: "server_vad" },
+                  // Default silence_duration_ms (~500ms) was cutting people
+                  // off mid-thought, especially when leaving a longer
+                  // message — give noticeably more room for a natural pause.
+                  turn_detection: { type: "server_vad", silence_duration_ms: 900 },
                   transcription: { model: "whisper-1" },
                 },
                 output: { format: { type: "audio/pcmu" }, voice: "marin" },

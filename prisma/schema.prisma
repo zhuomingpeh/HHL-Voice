@@ -1,0 +1,153 @@
+// Prisma schema for the AI Debt Reminder Calling System.
+//
+// Local dev uses SQLite (zero-config, no credentials required).
+// For production on Vercel, switch the datasource below to:
+//   provider = "postgresql"
+//   url      = env("DATABASE_URL")
+// and point DATABASE_URL at Vercel Postgres / Neon.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum BatchStatus {
+  DRAFT // uploaded, not yet validated
+  VALIDATED // validated, ready to call
+  RUNNING // calling in progress
+  PAUSED // staff paused the batch
+  COMPLETED // all records processed
+}
+
+// Call outcomes are intentionally NOT a Prisma enum. The spec calls these
+// "temporary" categories that will be renamed/merged/split after real-world
+// usage, and changing a Prisma enum requires a migration + backfill for
+// every historical row. Valid values are governed at the application layer
+// in src/lib/callOutcomes.ts and only loosely constrained here.
+model Batch {
+  id            String   @id @default(cuid())
+  filename      String
+  uploadedAt    DateTime @default(now())
+  status        BatchStatus @default(DRAFT)
+
+  totalRows     Int      @default(0)
+  validRows     Int      @default(0)
+  invalidRows   Int      @default(0)
+
+  // Configurable public-holiday advance-call rule snapshot for this batch,
+  // e.g. { "advanceDays": 1, "holidays": ["2026-01-01", ...] }. Kept per
+  // batch so past batches remain auditable even if the config changes later.
+  callSchedulingConfig Json?
+
+  records CustomerRecord[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model CustomerRecord {
+  id        String   @id @default(cuid())
+  batch     Batch    @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  batchId   String
+
+  rowNumber Int // 1-based row number in the source CSV, for error reporting
+
+  // Raw CSV fields (source of truth for this calling batch)
+  name           String
+  phoneNumberRaw String
+  phoneNumberE164 String? // normalized, null if it couldn't be parsed
+  dueDate        DateTime
+  remarks        String?
+
+  // Outstanding amount, ONLY populated when unambiguously extractable from
+  // Remarks. Never inferred, calculated, or guessed. Null means "unknown" —
+  // the AI must never state an amount in that case.
+  outstandingAmount Decimal?
+
+  isValid          Boolean  @default(false)
+  validationErrors Json? // string[] of validation error messages
+
+  calls           Call[]
+  callbackTasks   CallbackTask[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([batchId])
+  @@index([phoneNumberE164])
+}
+
+model Call {
+  id               String   @id @default(cuid())
+  customerRecord   CustomerRecord @relation(fields: [customerRecordId], references: [id], onDelete: Cascade)
+  customerRecordId String
+
+  twilioCallSid String?
+
+  startTime DateTime?
+  endTime   DateTime?
+  durationSeconds Int?
+
+  wasAnswered Boolean?
+
+  // Free-text outcome key, validated against src/lib/callOutcomes.ts at the
+  // application layer (see comment on Batch above).
+  outcome String?
+
+  identityConfirmed Boolean @default(false)
+
+  callSummary String?
+  transcript  Json? // array of { role, text, timestamp }
+
+  promiseToPayRaw        String? // original customer wording, verbatim
+  promiseToPayNormalized DateTime? // best-effort parsed date/time
+
+  paymentInstructionsRequested Boolean @default(false)
+  paymentInstructionsSent      Boolean @default(false)
+
+  callbackRequired Boolean @default(false)
+  callbackReason   String?
+
+  errorMessage String?
+
+  callbackTasks CallbackTask[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([customerRecordId])
+  @@index([twilioCallSid])
+}
+
+enum CallbackTaskStatus {
+  OPEN
+  COMPLETED
+}
+
+model CallbackTask {
+  id String @id @default(cuid())
+
+  customerRecord   CustomerRecord @relation(fields: [customerRecordId], references: [id], onDelete: Cascade)
+  customerRecordId String
+
+  call   Call?   @relation(fields: [callId], references: [id], onDelete: SetNull)
+  callId String?
+
+  reason           String
+  summary          String?
+  customerStatement String?
+
+  status      CallbackTaskStatus @default(OPEN)
+  completedAt DateTime?
+  completedBy String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([customerRecordId])
+  @@index([status])
+}

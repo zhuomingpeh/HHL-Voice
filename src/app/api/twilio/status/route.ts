@@ -35,13 +35,22 @@ export async function POST(req: NextRequest) {
 
   const callStatus = params.CallStatus ?? "";
   const durationSeconds = params.CallDuration ? Number(params.CallDuration) : undefined;
-  const outcome = outcomeForStatus(callStatus);
+  let outcome = outcomeForStatus(callStatus);
   const isTerminal = ["completed", "busy", "failed", "no-answer", "canceled"].includes(callStatus);
 
   const errorMessage =
     params.ErrorCode || params.ErrorMessage
       ? `${params.ErrorCode ?? ""} ${params.ErrorMessage ?? ""}`.trim()
       : undefined;
+
+  // "completed" is the generic fallback ("ANSWERED") — don't let it clobber
+  // a more specific outcome the AI (or async AMD) already set, e.g.
+  // LEFT_VOICEMAIL from /api/twilio/amd-status forcibly hanging up before
+  // this status callback lands.
+  if (callStatus === "completed") {
+    const existing = await prisma.call.findUnique({ where: { id: callId }, select: { outcome: true } });
+    if (existing?.outcome) outcome = null;
+  }
 
   await prisma.call.update({
     where: { id: callId },

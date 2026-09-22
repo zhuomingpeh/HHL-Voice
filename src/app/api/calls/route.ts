@@ -32,6 +32,7 @@ export async function POST(req: NextRequest) {
   const voiceUrl = buildTwilioWebhookUrl("/api/twilio/voice", { callId: call.id });
   const statusCallbackUrl = buildTwilioWebhookUrl("/api/twilio/status", { callId: call.id });
   const recordingStatusCallbackUrl = buildTwilioWebhookUrl("/api/twilio/recording", { callId: call.id });
+  const amdStatusCallbackUrl = buildTwilioWebhookUrl("/api/twilio/amd-status", { callId: call.id });
 
   try {
     const twilioCall = await getTwilioClient(config).calls.create({
@@ -46,16 +47,23 @@ export async function POST(req: NextRequest) {
       record: true,
       recordingStatusCallback: recordingStatusCallbackUrl,
       recordingStatusCallbackEvent: ["completed"],
-      // Re-enabled after a live test hit voicemail with AMD off: with no
-      // way to tell a machine from a human, the live conversational AI just
-      // tried (and failed) to "talk" to the voicemail greeting and got
-      // stuck for ~2 minutes instead of leaving voice/route.ts's dedicated
-      // one-way message. Was disabled earlier for latency, but that same
-      // commit also moved the server to sin1 (Singapore) — the two changes
-      // were never isolated, so it's unclear how much of that delay was
-      // actually AMD vs. cross-Pacific latency the region fix addresses.
-      // "Enable" (not "DetectMessageEnd") for the faster of the two modes.
-      machineDetection: "Enable",
+      // Synchronous AMD (both "Enable" and "DetectMessageEnd") was tried and
+      // rejected twice — even after moving the server to sin1, "Enable"
+      // still added a ~5s delay before a human ever heard anything, which
+      // is worse than the voicemail problem it was meant to fix (voicemail
+      // is the rare case; every single call paying a 5s tax is not).
+      // Async AMD is the actual fix: the call connects immediately (no
+      // delay for the common case — a human answering), and detection runs
+      // in the background, reported separately to amd-status/route.ts,
+      // which forcibly hangs up if it turns out to be a machine — bounded
+      // to a few seconds of the AI possibly talking into a voicemail
+      // greeting, instead of the ~2 minutes it got stuck for with AMD fully
+      // off. "DetectMessageEnd" (more accurate, previously avoided for
+      // being slower) is fine now since it's async and no longer blocks
+      // anything.
+      machineDetection: "DetectMessageEnd",
+      asyncAmd: "true",
+      asyncAmdStatusCallback: amdStatusCallbackUrl,
     });
 
     const updated = await prisma.call.update({

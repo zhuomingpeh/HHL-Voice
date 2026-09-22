@@ -10,8 +10,14 @@ import { isValidTwilioRequest } from "@/lib/twilio";
 const PLACEHOLDER_MESSAGE =
   "Hi, I'm calling with a reminder regarding a payment due today. This is an automated test call from the HHL Credit calling system. Goodbye.";
 
+// No native Singapore-English voice exists on Twilio (checked Twilio Basic,
+// Amazon Polly, and Google TTS). British English's Generative-tier voice is
+// the closest, most natural-sounding available option — swap this if a
+// better fit turns up (e.g. Polly.Kajal-Generative for Indian English).
+const VOICE = "Polly.Amy-Generative";
+
 function twimlResponse(say: string) {
-  const xml = `<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="Polly.Joanna">${say}</Say><Hangup/></Response>`;
+  const xml = `<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="${VOICE}">${say}</Say><Hangup/></Response>`;
   return new NextResponse(xml, { headers: { "Content-Type": "text/xml" } });
 }
 

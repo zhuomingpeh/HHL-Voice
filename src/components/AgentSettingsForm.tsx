@@ -16,8 +16,10 @@ interface AgentSettingsValues {
   voiceSimilarityBoost: number;
   voiceStyle: number;
   voiceSpeakerBoost: boolean;
+  voiceSpeed: number;
   openingLine: string;
   voicemailMessage: string;
+  additionalContext: string;
 }
 
 // Recommended starting point for a calm, consistent, professional-sounding
@@ -28,6 +30,7 @@ const PROFESSIONAL_DEFAULTS = {
   voiceSimilarityBoost: 0.75,
   voiceStyle: 0,
   voiceSpeakerBoost: true,
+  voiceSpeed: 1.0,
 };
 
 export function AgentSettingsForm({
@@ -63,6 +66,7 @@ export function AgentSettingsForm({
           voiceSimilarityBoost: values.voiceSimilarityBoost,
           voiceStyle: values.voiceStyle,
           voiceSpeakerBoost: values.voiceSpeakerBoost,
+          voiceSpeed: values.voiceSpeed,
           text: values.openingLine,
         }),
       });
@@ -159,6 +163,14 @@ export function AgentSettingsForm({
             value={values.voiceStyle}
             onChange={(v) => update("voiceStyle", v)}
           />
+          <SliderField
+            label="Speed"
+            hint="1.00 = normal pace. Keep within 0.85-1.15 to avoid sounding distorted."
+            value={values.voiceSpeed}
+            onChange={(v) => update("voiceSpeed", v)}
+            min={0.7}
+            max={1.2}
+          />
           <label className="flex items-center gap-2 text-sm">
             <input
               type="checkbox"
@@ -204,7 +216,7 @@ export function AgentSettingsForm({
           />
         </label>
 
-        <label className="block text-sm">
+        <label className="mb-3 block text-sm">
           <span className="mb-1 block text-neutral-600">
             Voicemail message (played if the call reaches an answering machine)
           </span>
@@ -212,6 +224,20 @@ export function AgentSettingsForm({
             value={values.voicemailMessage}
             onChange={(e) => update("voicemailMessage", e.target.value)}
             rows={2}
+            className="w-full rounded border border-neutral-300 px-2 py-1.5 text-sm"
+          />
+        </label>
+
+        <label className="block text-sm">
+          <span className="mb-1 block text-neutral-600">
+            Additional background for the AI (company policy, rules, tone notes — never read
+            aloud, and never overrides the fixed compliance rules)
+          </span>
+          <textarea
+            value={values.additionalContext}
+            onChange={(e) => update("additionalContext", e.target.value)}
+            rows={4}
+            placeholder="e.g. HHL Credit is a licensed moneylender in Singapore. Be extra patient with elderly customers. Never mention legal action."
             className="w-full rounded border border-neutral-300 px-2 py-1.5 text-sm"
           />
         </label>
@@ -238,11 +264,15 @@ function SliderField({
   hint,
   value,
   onChange,
+  min = 0,
+  max = 1,
 }: {
   label: string;
   hint: string;
   value: number;
   onChange: (value: number) => void;
+  min?: number;
+  max?: number;
 }) {
   return (
     <label className="block text-sm">
@@ -252,8 +282,8 @@ function SliderField({
       </span>
       <input
         type="range"
-        min={0}
-        max={1}
+        min={min}
+        max={max}
         step={0.05}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}

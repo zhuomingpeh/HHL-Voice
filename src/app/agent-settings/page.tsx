@@ -34,8 +34,10 @@ export default async function AgentSettingsPage() {
           voiceSimilarityBoost: settings.voiceSimilarityBoost,
           voiceStyle: settings.voiceStyle,
           voiceSpeakerBoost: settings.voiceSpeakerBoost,
+          voiceSpeed: settings.voiceSpeed,
           openingLine: settings.openingLine,
           voicemailMessage: settings.voicemailMessage,
+          additionalContext: settings.additionalContext,
         }}
         voices={voices}
       />

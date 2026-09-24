@@ -25,8 +25,10 @@ export interface AgentSettingsUpdateInput {
   voiceSimilarityBoost: number;
   voiceStyle: number;
   voiceSpeakerBoost: boolean;
+  voiceSpeed: number;
   openingLine: string;
   voicemailMessage: string;
+  additionalContext: string;
 }
 
 export async function updateAgentSettings(input: AgentSettingsUpdateInput): Promise<AgentSettings> {

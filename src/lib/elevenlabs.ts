@@ -24,6 +24,9 @@ export interface VoiceSettings {
   similarityBoost: number;
   style: number;
   speakerBoost: boolean;
+  // Playback speed multiplier. ElevenLabs allows 0.25-4.0 but quality
+  // degrades noticeably outside ~0.7-1.2, so callers should clamp to that.
+  speed: number;
 }
 
 export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
@@ -33,6 +36,7 @@ export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
   similarityBoost: 0.75,
   style: 0,
   speakerBoost: true,
+  speed: 1.0,
 };
 
 export interface VoiceSummary {
@@ -114,6 +118,7 @@ export async function streamTextToSpeech(
           similarity_boost: voiceSettings.similarityBoost,
           style: voiceSettings.style,
           use_speaker_boost: voiceSettings.speakerBoost,
+          speed: voiceSettings.speed,
         },
       }),
     }
@@ -154,6 +159,7 @@ export async function previewTextToSpeech(
           similarity_boost: voiceSettings.similarityBoost,
           style: voiceSettings.style,
           use_speaker_boost: voiceSettings.speakerBoost,
+          speed: voiceSettings.speed,
         },
       }),
     }

@@ -144,6 +144,10 @@ model AgentSettings {
   voiceSimilarityBoost Float   @default(0.75)
   voiceStyle           Float   @default(0)
   voiceSpeakerBoost    Boolean @default(true)
+  // ElevenLabs speed multiplier. 1.0 = unadjusted; clamped to 0.7-1.2 at the
+  // application layer (the API technically allows 0.25-4.0, but quality
+  // degrades noticeably outside the narrower range).
+  voiceSpeed           Float   @default(1.0)
 
   // Caller-facing script text. openingLine is played as fixed Twilio <Say>
   // TwiML before the AI connects (see voice/route.ts) and is also quoted
@@ -152,6 +156,11 @@ model AgentSettings {
   // machine.
   openingLine      String @default("Hi this is HHL Credit, your payment is due today. Will payment be made today?")
   voicemailMessage String @default("Hi, this is an automated call from HHL Credit regarding a payment reminder. Please call us back at your convenience. Thank you.")
+
+  // Background info fed to the AI as context (company policy, tone notes,
+  // etc.) — never read aloud, and explicitly non-authoritative over the
+  // strict rules/branch logic in systemPrompt.ts. Free text, staff-editable.
+  additionalContext String @default("")
 
   updatedAt DateTime @updatedAt
 }

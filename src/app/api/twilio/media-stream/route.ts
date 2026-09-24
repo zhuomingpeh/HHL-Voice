@@ -72,6 +72,7 @@ export async function GET() {
             similarityBoost: agentSettings.voiceSimilarityBoost,
             style: agentSettings.voiceStyle,
             speakerBoost: agentSettings.voiceSpeakerBoost,
+            speed: agentSettings.voiceSpeed,
           }
         : undefined;
       logTranscript("assistant", text);
@@ -234,6 +235,7 @@ export async function GET() {
                 dueDate: record!.dueDate,
                 outstandingAmount,
                 openingLine: agentSettings?.openingLine ?? "",
+                additionalContext: agentSettings?.additionalContext ?? "",
               }),
               tools: REALTIME_TOOLS,
             },
@@ -286,12 +288,21 @@ export async function GET() {
             break;
           }
           case "input_audio_buffer.speech_started": {
-            // Barge-in: stop any in-flight ElevenLabs playback and clear
-            // whatever Twilio has queued, so the customer doesn't keep
-            // hearing the assistant talk over them.
+            // Barge-in: stop any in-flight ElevenLabs playback, clear
+            // whatever Twilio has queued, AND cancel whatever response
+            // OpenAI is still generating server-side. Without response.cancel,
+            // a response already in flight when the customer interrupts keeps
+            // generating, finishes a few seconds later, and still gets
+            // spoken — landing on top of the reply to the interruption itself
+            // and sounding like the assistant is talking over/repeating
+            // itself instead of actually listening.
             playbackGeneration++;
+            responseTextBuffer = "";
             if (streamSid) {
               twilioWs.send(JSON.stringify({ event: "clear", streamSid }));
+            }
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: "response.cancel" }));
             }
             break;
           }

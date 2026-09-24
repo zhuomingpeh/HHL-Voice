@@ -12,18 +12,19 @@ export async function POST(req: NextRequest) {
   const voiceId = typeof body?.voiceId === "string" ? body.voiceId : "";
   if (!voiceId) return NextResponse.json({ error: "voiceId is required" }, { status: 400 });
 
-  const clamp01 = (n: unknown, fallback: number) =>
-    typeof n === "number" && Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : fallback;
+  const clamp = (n: unknown, min: number, max: number, fallback: number) =>
+    typeof n === "number" && Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
 
   try {
     const audio = await previewTextToSpeech(
       voiceId,
       typeof body?.text === "string" && body.text.trim() ? body.text.trim() : PREVIEW_TEXT,
       {
-        stability: clamp01(body?.voiceStability, 0.5),
-        similarityBoost: clamp01(body?.voiceSimilarityBoost, 0.75),
-        style: clamp01(body?.voiceStyle, 0),
+        stability: clamp(body?.voiceStability, 0, 1, 0.5),
+        similarityBoost: clamp(body?.voiceSimilarityBoost, 0, 1, 0.75),
+        style: clamp(body?.voiceStyle, 0, 1, 0),
         speakerBoost: Boolean(body?.voiceSpeakerBoost),
+        speed: clamp(body?.voiceSpeed, 0.7, 1.2, 1.0),
       }
     );
     return new NextResponse(audio, { headers: { "Content-Type": "audio/mpeg" } });

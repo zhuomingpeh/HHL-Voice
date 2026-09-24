@@ -24,18 +24,20 @@ export async function PUT(req: NextRequest) {
   if (!voicemailMessage)
     return NextResponse.json({ error: "voicemailMessage is required" }, { status: 400 });
 
-  const clamp01 = (n: unknown, fallback: number) =>
-    typeof n === "number" && Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : fallback;
+  const clamp = (n: unknown, min: number, max: number, fallback: number) =>
+    typeof n === "number" && Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
 
   const settings = await updateAgentSettings({
     voiceId,
     voiceName: typeof body.voiceName === "string" ? body.voiceName : null,
-    voiceStability: clamp01(body.voiceStability, 0.5),
-    voiceSimilarityBoost: clamp01(body.voiceSimilarityBoost, 0.75),
-    voiceStyle: clamp01(body.voiceStyle, 0),
+    voiceStability: clamp(body.voiceStability, 0, 1, 0.5),
+    voiceSimilarityBoost: clamp(body.voiceSimilarityBoost, 0, 1, 0.75),
+    voiceStyle: clamp(body.voiceStyle, 0, 1, 0),
     voiceSpeakerBoost: Boolean(body.voiceSpeakerBoost),
+    voiceSpeed: clamp(body.voiceSpeed, 0.7, 1.2, 1.0),
     openingLine,
     voicemailMessage,
+    additionalContext: typeof body.additionalContext === "string" ? body.additionalContext.trim() : "",
   });
 
   return NextResponse.json({ settings });

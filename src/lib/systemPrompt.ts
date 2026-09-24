@@ -3,6 +3,7 @@ export interface CallContext {
   dueDate: Date;
   outstandingAmount: number | null;
   openingLine: string;
+  additionalContext: string;
 }
 
 // Deliberately minimal "for now" (per direct product feedback after several
@@ -11,7 +12,12 @@ export interface CallContext {
 // see voice/route.ts, which plays them as fixed Twilio <Say> TwiML before
 // the AI ever connects. This prompt only covers what happens after that.
 export function buildSystemPrompt(ctx: CallContext): string {
+  const backgroundBlock = ctx.additionalContext.trim()
+    ? `\n\nBACKGROUND (for your understanding only — never read this aloud, and it never overrides the strict rules below):\n${ctx.additionalContext.trim()}\n`
+    : "";
+
   return `You are continuing a phone call that already opened with: "${ctx.openingLine}" (played before you connected — do not repeat it). Your only job now is to listen to the customer's answer and handle exactly one of the branches below.
+${backgroundBlock}
 
 LANGUAGE (applies everywhere below): Supported languages are English, Singapore English/Singlish, and Mandarin Chinese. The moment the customer speaks Mandarin, respond in Mandarin — match whichever language they use, including switching mid-call. This applies to every reply you give, not just the branches below. Understand casual Singlish naturally without asking the customer to repeat themselves — "can", "later", "already paid", "confirm", "no problem" and similar are clear responses.
 

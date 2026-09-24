@@ -49,13 +49,6 @@ export async function GET() {
     let hardTimeout: ReturnType<typeof setTimeout> | null = null;
     const transcript: TranscriptEntry[] = [];
     const bufferedMedia: string[] = [];
-    // The customer's audio is withheld from OpenAI until the opening line
-    // has fully finished — see the comment on openingLineTimeout below for
-    // why. Everything that arrives before then queues here instead.
-    let openingLineDone = false;
-    let openingLineTimeout: ReturnType<typeof setTimeout> | null = null;
-    let openingLineAttempts = 0;
-    let mediaEventCount = 0;
     let transcriptBuffer = "";
     // Bumped on every barge-in. Each response's audio is tagged with the
     // generation active when it started (currentResponseGeneration); if a
@@ -238,17 +231,6 @@ export async function GET() {
       const ws = new WebSocket(OPENAI_REALTIME_URL, { headers: { Authorization: `Bearer ${apiKey}` } });
       openaiWs = ws;
 
-      function finishOpeningLine() {
-        if (openingLineDone) return;
-        openingLineDone = true;
-        if (openingLineTimeout) clearTimeout(openingLineTimeout);
-        console.log(`[media-stream] opening line finished, flushing ${bufferedMedia.length} buffered media frames`);
-        for (const payload of bufferedMedia) {
-          ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio: payload }));
-        }
-        bufferedMedia.length = 0;
-      }
-
       ws.on("open", () => {
         const outstandingAmount = record!.outstandingAmount != null ? Number(record!.outstandingAmount) : null;
 
@@ -292,24 +274,16 @@ export async function GET() {
           })
         );
 
-        // The opening line is now the model's own first turn (see
-        // systemPrompt.ts) rather than fixed Twilio <Say> TwiML — trigger it
-        // immediately so the call doesn't just sit in silence waiting for
-        // the customer to speak first.
-        //
-        // Deliberately NOT forwarding customer audio yet (see finishOpeningLine
-        // above / the "media" handler below). A real call showed OpenAI's own
-        // server-side turn detection cancelling this very first response the
-        // instant it heard ANYTHING from the customer's line — even just
-        // "hello?" on pickup, which is completely normal — and retrying
-        // several times before the opening line got through, taking 5-10s
-        // and coming out in confusing fragments. Customer audio is queued
-        // instead and only released to the model once the opening line has
-        // actually finished (or a timeout fires, in case something goes
-        // wrong) — after that, normal real-time listening/interruption
-        // applies for the rest of the call as usual.
-        ws.send(JSON.stringify({ type: "response.create" }));
-        openingLineTimeout = setTimeout(finishOpeningLine, 8000);
+        // No "speak first" nudge here — the opening line was already played
+        // as fixed Twilio <Say> TwiML before this connection was made (see
+        // voice/route.ts). The model's first turn should be reacting to
+        // whatever the customer says in response to that.
+
+        // Flush any caller audio that arrived while we were still connecting.
+        for (const payload of bufferedMedia) {
+          ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio: payload }));
+        }
+        bufferedMedia.length = 0;
       });
 
       ws.on("message", (raw) => {
@@ -349,14 +323,6 @@ export async function GET() {
             spokeThisResponse = true;
             audioBytesThisResponse += Buffer.byteLength(payload, "base64");
             twilioWs.send(JSON.stringify({ event: "media", streamSid, media: { payload } }));
-            // Unblock customer audio the INSTANT real speech starts playing,
-            // not when the whole response finishes. A real call showed the
-            // opening turn saying the configured line PLUS an ad-libbed
-            // follow-up ("I'm listening, tell me...") in the same response —
-            // waiting for response.done meant withholding the customer's mic
-            // for the full ~8s of both lines combined. Once actual audio is
-            // flowing, normal barge-in applies exactly like any other turn.
-            if (!openingLineDone) finishOpeningLine();
             break;
           }
           case "response.output_audio_transcript.delta": {
@@ -375,31 +341,8 @@ export async function GET() {
             // function call) means the model produced nothing for that
             // turn — surfaced as "the AI just went silent" on a real call.
             const response = event.response as { output?: unknown[] } | undefined;
-            const hadOutput = Boolean(response?.output && response.output.length > 0);
-            if (!hadOutput) {
+            if (!response?.output || response.output.length === 0) {
               console.error("[media-stream] response.done with empty output — model said nothing", JSON.stringify(event.response));
-            }
-            if (!openingLineDone) {
-              // A previous bug here called finishOpeningLine() on ANY first
-              // response.done, including an empty/cancelled one — which
-              // released buffered customer audio before the opening line had
-              // actually played, letting that audio trigger MORE cancellations
-              // of the (still-unplayed) opening line. Only release once a
-              // response has genuinely produced audio; otherwise retry.
-              if (spokeThisResponse || hadOutput) {
-                finishOpeningLine();
-              } else {
-                openingLineAttempts++;
-                console.error(`[media-stream] opening line attempt ${openingLineAttempts} produced nothing, retrying`);
-                if (openingLineAttempts < 6 && ws.readyState === WebSocket.OPEN) {
-                  ws.send(JSON.stringify({ type: "response.create" }));
-                } else {
-                  // Give up retrying rather than risk hanging the call — the
-                  // 8s safety timeout would otherwise still catch this, but
-                  // no reason to wait that long once retries are exhausted.
-                  finishOpeningLine();
-                }
-              }
             }
             const resolvers = pendingResponseDoneResolvers;
             pendingResponseDoneResolvers = [];
@@ -514,13 +457,8 @@ export async function GET() {
         case "media": {
           const media = msg.media as { payload?: string } | undefined;
           if (!media?.payload) break;
-          mediaEventCount++;
-          const forwarding = Boolean(openaiWs && openaiWs.readyState === WebSocket.OPEN && openingLineDone);
-          if (mediaEventCount <= 15) {
-            console.log(`[media-stream] media frame #${mediaEventCount}: openingLineDone=${openingLineDone} forwarding=${forwarding}`);
-          }
-          if (forwarding) {
-            openaiWs!.send(JSON.stringify({ type: "input_audio_buffer.append", audio: media.payload }));
+          if (openaiWs && openaiWs.readyState === WebSocket.OPEN) {
+            openaiWs.send(JSON.stringify({ type: "input_audio_buffer.append", audio: media.payload }));
           } else {
             bufferedMedia.push(media.payload);
             if (bufferedMedia.length > 1000) bufferedMedia.shift(); // defensive cap

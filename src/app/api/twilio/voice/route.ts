@@ -7,17 +7,22 @@ function escapeXml(value: string): string {
   return value.replace(/&/g, "&amp;");
 }
 
-// The opening line used to be played here as fixed Twilio <Say> TwiML
-// before the AI ever connected — but Twilio's <Say> can't be interrupted by
-// the customer (no listening happens until <Connect><Stream> starts), so if
-// they spoke over it, nothing heard them until it finished reciting. Now we
-// connect the stream immediately and the AI speaks the opening line itself
-// as its first turn (see media-stream/route.ts) — real-time audio, so
-// OpenAI's own server-side turn detection can interrupt it the instant the
-// customer starts talking, same as any other turn.
-function connectStreamTwiml(streamUrl: string, callId: string) {
+// Tried having the AI speak the opening line itself as its first native-audio
+// turn (real-time, so the customer could interrupt it) — reverted. Real test
+// calls showed a consistent, unpredictable 5-10s delay: OpenAI's own
+// server-side turn detection kept auto-cancelling that very first response
+// the instant it heard anything from the customer's line, even normal
+// pickup noise/"hello?", before the WebSocket + session.update + generation
+// pipeline had even settled. Every turn AFTER the opening line was
+// consistently fast and interruptible in testing — the problem was isolated
+// to this specific first turn, racing against connection setup. A fixed
+// Twilio <Say> has none of that: it plays instantly and takes exactly as
+// long as the text requires, at the cost of not being interruptible
+// mid-word — a better trade than an unpredictable multi-second hang.
+function connectStreamTwiml(streamUrl: string, callId: string, openingLine: string) {
   const xml =
     `<?xml version="1.0" encoding="UTF-8"?><Response>` +
+    `<Say voice="Polly.Amy-Generative">${escapeXml(openingLine)}</Say>` +
     `<Connect><Stream url="${escapeXml(streamUrl)}">` +
     `<Parameter name="callId" value="${escapeXml(callId)}" /></Stream></Connect></Response>`;
   return new NextResponse(xml, { headers: { "Content-Type": "text/xml" } });
@@ -67,11 +72,12 @@ export async function POST(req: NextRequest) {
       // fail the call itself over a bookkeeping miss.
     });
 
+  const settings = await getAgentSettings();
+
   if (isMachine) {
-    const settings = await getAgentSettings();
     return voicemailTwiml(settings.voicemailMessage);
   }
 
   const streamUrl = buildTwilioMediaStreamUrl("/api/twilio/media-stream");
-  return connectStreamTwiml(streamUrl, callId);
+  return connectStreamTwiml(streamUrl, callId, settings.openingLine);
 }

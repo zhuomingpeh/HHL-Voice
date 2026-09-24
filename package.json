@@ -12,7 +12,8 @@
     "db:push": "dotenv -e .env.local -- prisma db push",
     "db:studio": "dotenv -e .env.local -- prisma studio",
     "db:generate": "prisma generate",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "test:agent": "dotenv -e .env.local -- tsx scripts/test-agent-conversation.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
@@ -41,6 +42,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.3.5",
     "tailwindcss": "^4",
+    "tsx": "^4.23.15",
     "typescript": "^5"
   }
 }

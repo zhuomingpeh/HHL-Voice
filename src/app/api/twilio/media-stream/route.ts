@@ -53,6 +53,19 @@ export async function GET() {
     // closing line to actually finish playing before hanging up, instead of
     // a fixed guess — ElevenLabs streaming takes variable time per message.
     let activeSpeak: Promise<void> = Promise.resolve();
+    // Tracks whether OpenAI currently has a response in flight, so barge-in
+    // only sends response.cancel when there's actually something to cancel —
+    // otherwise OpenAI returns a "response_cancel_not_active" error (harmless
+    // noise, but worth avoiding).
+    let responseActive = false;
+    // Reset per response.created, set true once that response actually
+    // produces spoken text. The self-diagnostic harness (scripts/test-agent-
+    // conversation.ts) caught a real case of the model calling end_call with
+    // ZERO spoken output beforehand — a silent hangup, which the prompt's
+    // strict rules forbid but don't reliably prevent on their own. This is
+    // the code-level backstop: if a response reaches end_call without having
+    // spoken, we say a generic fallback line ourselves before hanging up.
+    let spokeThisResponse = false;
 
     function logTranscript(role: string, text: string) {
       if (!text) return;
@@ -151,6 +164,15 @@ export async function GET() {
                 : "ANSWERED";
             const summary = typeof args.summary === "string" ? args.summary : null;
             await finalizeCall(outcome, summary);
+            // Safety net: never hang up in silence. The prompt tells the
+            // model to always speak before calling end_call, but that's not
+            // guaranteed — if this response had no spoken text, say a
+            // generic closing line ourselves rather than just disconnecting.
+            if (!spokeThisResponse) {
+              activeSpeak = speak("Thank you, we'll follow up with you.").catch((err) =>
+                console.error("[media-stream] fallback closing line failed", err)
+              );
+            }
             // Wait for the closing line's ElevenLabs playback to actually
             // finish before hanging up — <Connect><Stream> ties the call's
             // fate to this connection, so closing it is what ends the
@@ -270,6 +292,11 @@ export async function GET() {
         }
 
         switch (event.type) {
+          case "response.created": {
+            responseActive = true;
+            spokeThisResponse = false;
+            break;
+          }
           case "response.output_text.delta": {
             responseTextBuffer += (event.delta as string | undefined) ?? "";
             break;
@@ -278,9 +305,24 @@ export async function GET() {
             const finalText =
               (event.text as string | undefined) ?? responseTextBuffer;
             responseTextBuffer = "";
+            if (finalText.trim()) spokeThisResponse = true;
             activeSpeak = speak(finalText).catch((err) =>
               console.error("[media-stream] speak() failed", err)
             );
+            break;
+          }
+          case "response.done": {
+            responseActive = false;
+            // Diagnostic: a response with no text output and no function
+            // call (empty output array) means the model chose to say
+            // nothing at all for that turn — surfaced as "the AI just went
+            // silent" on a real call. Logging the full payload here (rather
+            // than just the event type, like the generic log above) makes
+            // that visible instead of invisible.
+            const response = event.response as { output?: unknown[]; status?: string } | undefined;
+            if (!response?.output || response.output.length === 0) {
+              console.error("[media-stream] response.done with empty output — model said nothing", JSON.stringify(event.response));
+            }
             break;
           }
           case "conversation.item.input_audio_transcription.completed": {
@@ -295,13 +337,15 @@ export async function GET() {
             // generating, finishes a few seconds later, and still gets
             // spoken — landing on top of the reply to the interruption itself
             // and sounding like the assistant is talking over/repeating
-            // itself instead of actually listening.
+            // itself instead of actually listening. Only sent when a
+            // response is actually active — otherwise OpenAI returns a
+            // "response_cancel_not_active" error (harmless, but noisy).
             playbackGeneration++;
             responseTextBuffer = "";
             if (streamSid) {
               twilioWs.send(JSON.stringify({ event: "clear", streamSid }));
             }
-            if (ws.readyState === WebSocket.OPEN) {
+            if (responseActive && ws.readyState === WebSocket.OPEN) {
               ws.send(JSON.stringify({ type: "response.cancel" }));
             }
             break;

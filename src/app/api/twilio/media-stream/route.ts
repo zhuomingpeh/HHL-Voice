@@ -349,6 +349,14 @@ export async function GET() {
             spokeThisResponse = true;
             audioBytesThisResponse += Buffer.byteLength(payload, "base64");
             twilioWs.send(JSON.stringify({ event: "media", streamSid, media: { payload } }));
+            // Unblock customer audio the INSTANT real speech starts playing,
+            // not when the whole response finishes. A real call showed the
+            // opening turn saying the configured line PLUS an ad-libbed
+            // follow-up ("I'm listening, tell me...") in the same response —
+            // waiting for response.done meant withholding the customer's mic
+            // for the full ~8s of both lines combined. Once actual audio is
+            // flowing, normal barge-in applies exactly like any other turn.
+            if (!openingLineDone) finishOpeningLine();
             break;
           }
           case "response.output_audio_transcript.delta": {

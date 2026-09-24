@@ -136,24 +136,30 @@ model Call {
 model AgentSettings {
   id String @id @default("singleton")
 
-  // ElevenLabs voice + tuning. voiceId defaults to ELEVENLABS_VOICE_ID (the
-  // cloned voice) the first time settings are read — see src/lib/agentSettings.ts.
-  voiceId              String
+  // Native OpenAI Realtime voice (e.g. "marin", "cedar") — see
+  // src/app/api/twilio/media-stream/route.ts. Replaced ElevenLabs for the
+  // live call path: ElevenLabs added a text -> TTS-API round trip of latency
+  // per turn and only stopped OUR playback loop on barge-in, not the actual
+  // generation; native audio streams straight from the model in Twilio's own
+  // format and gets OpenAI's own server-side interruption handling for free.
+  openaiVoice String @default("marin")
+
+  // Deprecated — ElevenLabs cloned-voice fields, no longer read by the call
+  // path. Left in place (rather than a disruptive migration) in case cloned
+  // voices come back later; src/lib/elevenlabs.ts is likewise kept but unused.
+  voiceId              String  @default("")
   voiceName            String?
   voiceStability       Float   @default(0.5)
   voiceSimilarityBoost Float   @default(0.75)
   voiceStyle           Float   @default(0)
   voiceSpeakerBoost    Boolean @default(true)
-  // ElevenLabs speed multiplier. 1.0 = unadjusted; clamped to 0.7-1.2 at the
-  // application layer (the API technically allows 0.25-4.0, but quality
-  // degrades noticeably outside the narrower range).
   voiceSpeed           Float   @default(1.0)
 
-  // Caller-facing script text. openingLine is played as fixed Twilio <Say>
-  // TwiML before the AI connects (see voice/route.ts) and is also quoted
-  // back to the model in its system prompt so it knows what was already
-  // said; voicemailMessage plays as a one-way message when AMD detects a
-  // machine.
+  // Caller-facing script text. openingLine is now spoken by the model itself
+  // as its first turn (see systemPrompt.ts) rather than fixed Twilio <Say>
+  // TwiML, so the customer can interrupt it like any other turn;
+  // voicemailMessage still plays as fixed TwiML — a one-way message when
+  // AMD detects a machine, intentionally not a live AI conversation.
   openingLine      String @default("Hi this is HHL Credit, your payment is due today. Will payment be made today?")
   voicemailMessage String @default("Hi, this is an automated call from HHL Credit regarding a payment reminder. Please call us back at your convenience. Thank you.")
 

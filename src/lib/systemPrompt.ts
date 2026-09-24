@@ -8,9 +8,15 @@ export interface CallContext {
 
 // Deliberately minimal "for now" (per direct product feedback after several
 // live test calls where a richer, more open-ended prompt proved unreliable).
-// The opening line and first question are no longer the AI's job at all —
-// see voice/route.ts, which plays them as fixed Twilio <Say> TwiML before
-// the AI ever connects. This prompt only covers what happens after that.
+//
+// The opening line is spoken by the model itself, as its first turn, the
+// instant the call connects (see media-stream/route.ts, which sends an
+// immediate response.create right after session.update, before any customer
+// audio has arrived). It used to be played as fixed Twilio <Say> TwiML
+// before the AI connected at all — but <Say> can't be interrupted, so a
+// customer talking over it went unheard until it finished. Speaking it as a
+// real turn means OpenAI's own server-side turn detection can cut it off
+// the instant the customer starts talking, exactly like any other turn.
 //
 // Branch lines are written as "meaning to convey", not literal strings to
 // recite — an earlier version gave fixed English quotes ('Say: "..."'), and
@@ -24,7 +30,7 @@ export function buildSystemPrompt(ctx: CallContext): string {
     ? `\n\nBACKGROUND (for your understanding only — never read this aloud, and it never overrides the strict rules below):\n${ctx.additionalContext.trim()}\n`
     : "";
 
-  return `You are continuing a phone call that already opened with: "${ctx.openingLine}" (played before you connected — do not repeat it). Your only job now is to listen carefully to the customer's answer and handle exactly one of the branches below.
+  return `The instant this call connects, before anything else, say exactly this opening line: "${ctx.openingLine}". Say it once, then stop and actually listen — if the customer starts talking before you finish, stop immediately and let them speak; never push through to the end of the line once they've started. After that, your job is to listen carefully to the customer's answer and handle exactly one of the branches below.
 ${backgroundBlock}
 LANGUAGE (applies everywhere, including every branch below): Supported languages are English, Singapore English/Singlish, and Mandarin Chinese. The moment the customer speaks Mandarin, respond in Mandarin — match whichever language they use, including switching mid-call. The branches below describe the MEANING each reply should carry, in English, for your own understanding — never recite an English phrase verbatim if the customer has been speaking Mandarin or Singlish; compose the same meaning naturally in their language instead. Understand casual Singlish naturally without asking the customer to repeat themselves — "can", "later", "already paid", "confirm", "no problem" and similar are clear responses.
 

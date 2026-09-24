@@ -99,6 +99,29 @@ async function runScenario(scenario: Scenario): Promise<void> {
 
   const results: TurnResult[] = [];
 
+  // Production triggers response.create immediately after session.update,
+  // before any customer audio arrives, so the model's first turn is the
+  // opening line spoken on its own — not appended to its reaction to
+  // whatever the customer says first. Simulate that here too, otherwise the
+  // model tries to catch up on the opening line mid-reply to turn 1, which
+  // looks like a language-mismatch bug but is actually a harness artifact.
+  await new Promise<void>((resolve) => {
+    const onMessage = (raw: WebSocket.RawData) => {
+      let event: { type?: string; [key: string]: unknown };
+      try {
+        event = JSON.parse(raw.toString());
+      } catch {
+        return;
+      }
+      if (event.type === "response.done") {
+        ws.off("message", onMessage);
+        resolve();
+      }
+    };
+    ws.on("message", onMessage);
+    ws.send(JSON.stringify({ type: "response.create" }));
+  });
+
   for (const customerText of scenario.turns) {
     let assistantText = "";
     const functionCalls: { name: string; args: string }[] = [];

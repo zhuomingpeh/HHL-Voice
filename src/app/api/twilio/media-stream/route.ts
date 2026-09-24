@@ -4,7 +4,6 @@ import { prisma } from "@/lib/prisma";
 import { buildSystemPrompt } from "@/lib/systemPrompt";
 import { REALTIME_TOOLS } from "@/lib/realtimeTools";
 import { CALL_OUTCOME_KEYS } from "@/lib/callOutcomes";
-import { streamTextToSpeech, type VoiceSettings } from "@/lib/elevenlabs";
 import { getAgentSettings } from "@/lib/agentSettings";
 import type { Prisma, CustomerRecord, AgentSettings } from "@prisma/client";
 
@@ -21,6 +20,12 @@ const MAX_CALL_MS = 3 * 60 * 1000;
 // fit — bump to gpt-realtime-2.1 only if live testing shows it mishandling
 // branch selection or tool-call timing.
 const OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime?model=gpt-realtime-2.1-mini";
+
+// PCMU (g711 mu-law) is 1 byte per sample at 8000 samples/sec — exactly
+// Twilio's native telephony format, so audio bytes forward straight through
+// with no transcoding. Used to convert bytes sent -> real playback duration,
+// so end_call can wait for audio to actually finish before hanging up.
+const PCMU_BYTES_PER_MS = 8;
 
 interface TranscriptEntry {
   role: string;
@@ -44,69 +49,46 @@ export async function GET() {
     let hardTimeout: ReturnType<typeof setTimeout> | null = null;
     const transcript: TranscriptEntry[] = [];
     const bufferedMedia: string[] = [];
-    let responseTextBuffer = "";
-    // Bumped on every barge-in; an in-flight TTS playback loop checks this
-    // and stops sending audio to Twilio if it's gone stale, so we don't
-    // keep talking over a customer who just started speaking.
+    let transcriptBuffer = "";
+    // Bumped on every barge-in. Each response's audio is tagged with the
+    // generation active when it started (currentResponseGeneration); if a
+    // barge-in bumps playbackGeneration mid-stream, any further deltas for
+    // that now-stale response are dropped instead of forwarded to Twilio.
     let playbackGeneration = 0;
-    // Tracks the most recent speak() call so end_call can wait for the
-    // closing line to actually finish playing before hanging up, instead of
-    // a fixed guess — ElevenLabs streaming takes variable time per message.
-    let activeSpeak: Promise<void> = Promise.resolve();
+    let currentResponseGeneration = 0;
     // Tracks whether OpenAI currently has a response in flight, so barge-in
     // only sends response.cancel when there's actually something to cancel —
     // otherwise OpenAI returns a "response_cancel_not_active" error (harmless
-    // noise, but worth avoiding).
+    // noise, but worth avoiding). OpenAI's own server-side turn detection
+    // already auto-cancels the in-flight response when it detects the
+    // customer speaking (observed directly in production logs, response.done
+    // with status "cancelled"/reason "turn_detected") — our own cancel call
+    // is a redundant belt-and-suspenders, not the primary mechanism.
     let responseActive = false;
-    // Reset per response.created, set true once that response actually
-    // produces spoken text. The self-diagnostic harness (scripts/test-agent-
-    // conversation.ts) caught a real case of the model calling end_call with
-    // ZERO spoken output beforehand — a silent hangup, which the prompt's
-    // strict rules forbid but don't reliably prevent on their own. This is
-    // the code-level backstop: if a response reaches end_call without having
-    // spoken, we say a generic fallback line ourselves before hanging up.
+    // Reset per response.created, set true the moment that response forwards
+    // any real audio to Twilio. The self-diagnostic harness (scripts/test-
+    // agent-conversation.ts) caught a real case of the model calling end_call
+    // with ZERO spoken output beforehand — a silent hangup, which the
+    // prompt's strict rules forbid but don't reliably prevent on their own.
+    // This is the code-level backstop: if end_call fires without this having
+    // been set, we prompt the model to say a brief closing line before we
+    // actually hang up.
     let spokeThisResponse = false;
+    // Total PCMU bytes forwarded for the current response — converted to a
+    // playback-duration wait before hanging up, so end_call doesn't cut off
+    // the tail of whatever was just said.
+    let audioBytesThisResponse = 0;
+    // Resolved on the next response.done after being created — used to wait
+    // for "the response currently in flight" to fully finish, including a
+    // corrective one triggered after the fact (see end_call handling).
+    let pendingResponseDoneResolvers: Array<() => void> = [];
+    function waitForResponseDone(): Promise<void> {
+      return new Promise((resolve) => pendingResponseDoneResolvers.push(resolve));
+    }
 
     function logTranscript(role: string, text: string) {
       if (!text) return;
       transcript.push({ role, text, timestamp: new Date().toISOString() });
-    }
-
-    async function speak(text: string) {
-      if (!text.trim() || !streamSid) return;
-      const voiceId = agentSettings?.voiceId || process.env.ELEVENLABS_VOICE_ID;
-      if (!voiceId) {
-        console.error("[media-stream] no ElevenLabs voice configured (agent settings or ELEVENLABS_VOICE_ID)");
-        return;
-      }
-      const voiceSettings: VoiceSettings | undefined = agentSettings
-        ? {
-            stability: agentSettings.voiceStability,
-            similarityBoost: agentSettings.voiceSimilarityBoost,
-            style: agentSettings.voiceStyle,
-            speakerBoost: agentSettings.voiceSpeakerBoost,
-            speed: agentSettings.voiceSpeed,
-          }
-        : undefined;
-      logTranscript("assistant", text);
-
-      const myGeneration = playbackGeneration;
-      try {
-        const stream = await streamTextToSpeech(voiceId, text, voiceSettings);
-        for await (const chunk of stream as unknown as AsyncIterable<Uint8Array>) {
-          if (myGeneration !== playbackGeneration) break; // barged in — stop playing
-          if (twilioWs.readyState !== WebSocket.OPEN) break;
-          twilioWs.send(
-            JSON.stringify({
-              event: "media",
-              streamSid,
-              media: { payload: Buffer.from(chunk).toString("base64") },
-            })
-          );
-        }
-      } catch (err) {
-        console.error("[media-stream] ElevenLabs TTS failed", err);
-      }
     }
 
     async function finalizeCall(outcome: string | null, summary: string | null) {
@@ -128,10 +110,24 @@ export async function GET() {
       }
     }
 
+    function closeConnections() {
+      try {
+        openaiWs?.close();
+      } catch {
+        // already closed
+      }
+      try {
+        twilioWs.close();
+      } catch {
+        // already closed
+      }
+    }
+
     async function handleFunctionCall(name: string, toolCallId: string, argsRaw: string) {
       if (!callId || !record || !openaiWs) return;
       const recordId = record.id;
       const activeCallId = callId;
+      const ws = openaiWs;
 
       let args: Record<string, unknown> = {};
       try {
@@ -164,35 +160,42 @@ export async function GET() {
                 : "ANSWERED";
             const summary = typeof args.summary === "string" ? args.summary : null;
             await finalizeCall(outcome, summary);
-            // Safety net: never hang up in silence. The prompt tells the
-            // model to always speak before calling end_call, but that's not
-            // guaranteed — if this response had no spoken text, say a
-            // generic closing line ourselves rather than just disconnecting.
-            if (!spokeThisResponse) {
-              activeSpeak = speak("Thank you, we'll follow up with you.").catch((err) =>
-                console.error("[media-stream] fallback closing line failed", err)
+
+            // Let the response containing this end_call call finish
+            // streaming its audio (it may not be fully done yet — function
+            // calls can complete before the rest of the response has).
+            await waitForResponseDone();
+
+            // Safety net: never hang up in silence. Rather than a hardcoded
+            // (necessarily English) fallback line, ask the model itself to
+            // say a brief closing — it already knows what language the call
+            // has been in.
+            if (!spokeThisResponse && ws.readyState === WebSocket.OPEN) {
+              const fallbackDone = waitForResponseDone();
+              ws.send(
+                JSON.stringify({
+                  type: "conversation.item.create",
+                  item: {
+                    type: "message",
+                    role: "user",
+                    content: [
+                      {
+                        type: "input_text",
+                        text: "(automated note: you just tried to end the call without saying anything out loud — say a brief closing line now, in whichever language you were using, then nothing else)",
+                      },
+                    ],
+                  },
+                })
               );
+              ws.send(JSON.stringify({ type: "response.create" }));
+              await fallbackDone;
             }
-            // Wait for the closing line's ElevenLabs playback to actually
-            // finish before hanging up — <Connect><Stream> ties the call's
-            // fate to this connection, so closing it is what ends the
-            // phone call; finalizeCall above only updates our own records.
-            activeSpeak
-              .catch(() => {})
-              .then(() => {
-                setTimeout(() => {
-                  try {
-                    openaiWs?.close();
-                  } catch {
-                    // already closed
-                  }
-                  try {
-                    twilioWs.close();
-                  } catch {
-                    // already closed
-                  }
-                }, 500); // small buffer for the last audio packet to flush through Twilio
-              });
+
+            // <Connect><Stream> ties the call's fate to this connection, so
+            // closing it is what actually ends the phone call. Wait for the
+            // just-forwarded audio to finish playing (not just finish
+            // sending) before hanging up.
+            setTimeout(closeConnections, audioBytesThisResponse / PCMU_BYTES_PER_MS + 300);
             break;
           }
           default:
@@ -203,15 +206,15 @@ export async function GET() {
         result = { error: "internal error handling tool call" };
       }
 
-      if (openaiWs.readyState === WebSocket.OPEN) {
-        openaiWs.send(
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(
           JSON.stringify({
             type: "conversation.item.create",
             item: { type: "function_call_output", call_id: toolCallId, output: JSON.stringify(result) },
           })
         );
         if (name !== "end_call") {
-          openaiWs.send(JSON.stringify({ type: "response.create" }));
+          ws.send(JSON.stringify({ type: "response.create" }));
         }
       }
     }
@@ -237,11 +240,14 @@ export async function GET() {
             session: {
               type: "realtime",
               model: "gpt-realtime-2.1-mini",
-              // Text only — OpenAI still does the listening/understanding
-              // and all tool-calling, but speaking is handled by ElevenLabs
-              // (the user's cloned voice) instead of gpt-realtime's own
-              // built-in voice. See speak() above.
-              output_modalities: ["text"],
+              // Native audio output — replaces the earlier text + ElevenLabs
+              // pipeline. That extra hop (wait for full text, call ElevenLabs,
+              // stream its response) added latency and meant barge-in only
+              // stopped OUR playback loop, not the underlying generation.
+              // Native audio streams directly from the model in the same
+              // format Twilio needs (no transcoding) and gets OpenAI's own
+              // server-side interruption handling for free.
+              output_modalities: ["audio"],
               audio: {
                 input: {
                   format: { type: "audio/pcmu" },
@@ -250,6 +256,10 @@ export async function GET() {
                   // message — give noticeably more room for a natural pause.
                   turn_detection: { type: "server_vad", silence_duration_ms: 900 },
                   transcription: { model: "whisper-1" },
+                },
+                output: {
+                  format: { type: "audio/pcmu" },
+                  voice: agentSettings?.openaiVoice || "marin",
                 },
               },
               instructions: buildSystemPrompt({
@@ -263,10 +273,12 @@ export async function GET() {
             },
           })
         );
-        // No "speak first" nudge here — the opening line and question were
-        // already played as fixed Twilio <Say> TwiML before this connection
-        // was made. The model's first turn should be reacting to whatever
-        // the customer says in response to that.
+
+        // The opening line is now the model's own first turn (see
+        // systemPrompt.ts) rather than fixed Twilio <Say> TwiML — trigger it
+        // immediately so the call doesn't just sit in silence waiting for
+        // the customer to speak first.
+        ws.send(JSON.stringify({ type: "response.create" }));
 
         // Flush any caller audio that arrived while we were still connecting.
         for (const payload of bufferedMedia) {
@@ -285,9 +297,13 @@ export async function GET() {
 
         // Temporary: the GA Realtime wire protocol isn't fully verified yet
         // (it changed meaningfully from the widely-documented 2024 beta) —
-        // log every event type except the noisy per-chunk text delta so we
+        // log every event type except the high-volume per-chunk deltas so we
         // can confirm/correct event names against real traffic.
-        if (event.type && event.type !== "response.output_text.delta") {
+        if (
+          event.type &&
+          event.type !== "response.output_audio.delta" &&
+          event.type !== "response.output_audio_transcript.delta"
+        ) {
           console.log("[media-stream] openai event:", event.type);
         }
 
@@ -295,34 +311,43 @@ export async function GET() {
           case "response.created": {
             responseActive = true;
             spokeThisResponse = false;
+            audioBytesThisResponse = 0;
+            currentResponseGeneration = playbackGeneration;
+            transcriptBuffer = "";
             break;
           }
-          case "response.output_text.delta": {
-            responseTextBuffer += (event.delta as string | undefined) ?? "";
+          case "response.output_audio.delta": {
+            if (currentResponseGeneration !== playbackGeneration) break; // stale — barged in since this response started
+            if (!streamSid || twilioWs.readyState !== WebSocket.OPEN) break;
+            const payload = event.delta as string | undefined;
+            if (!payload) break;
+            spokeThisResponse = true;
+            audioBytesThisResponse += Buffer.byteLength(payload, "base64");
+            twilioWs.send(JSON.stringify({ event: "media", streamSid, media: { payload } }));
             break;
           }
-          case "response.output_text.done": {
-            const finalText =
-              (event.text as string | undefined) ?? responseTextBuffer;
-            responseTextBuffer = "";
-            if (finalText.trim()) spokeThisResponse = true;
-            activeSpeak = speak(finalText).catch((err) =>
-              console.error("[media-stream] speak() failed", err)
-            );
+          case "response.output_audio_transcript.delta": {
+            transcriptBuffer += (event.delta as string | undefined) ?? "";
+            break;
+          }
+          case "response.output_audio_transcript.done": {
+            const finalText = (event.transcript as string | undefined) ?? transcriptBuffer;
+            transcriptBuffer = "";
+            logTranscript("assistant", finalText);
             break;
           }
           case "response.done": {
             responseActive = false;
-            // Diagnostic: a response with no text output and no function
-            // call (empty output array) means the model chose to say
-            // nothing at all for that turn — surfaced as "the AI just went
-            // silent" on a real call. Logging the full payload here (rather
-            // than just the event type, like the generic log above) makes
-            // that visible instead of invisible.
-            const response = event.response as { output?: unknown[]; status?: string } | undefined;
+            // Diagnostic: a response with no output at all (no audio, no
+            // function call) means the model produced nothing for that
+            // turn — surfaced as "the AI just went silent" on a real call.
+            const response = event.response as { output?: unknown[] } | undefined;
             if (!response?.output || response.output.length === 0) {
               console.error("[media-stream] response.done with empty output — model said nothing", JSON.stringify(event.response));
             }
+            const resolvers = pendingResponseDoneResolvers;
+            pendingResponseDoneResolvers = [];
+            resolvers.forEach((resolve) => resolve());
             break;
           }
           case "conversation.item.input_audio_transcription.completed": {
@@ -330,18 +355,15 @@ export async function GET() {
             break;
           }
           case "input_audio_buffer.speech_started": {
-            // Barge-in: stop any in-flight ElevenLabs playback, clear
-            // whatever Twilio has queued, AND cancel whatever response
-            // OpenAI is still generating server-side. Without response.cancel,
-            // a response already in flight when the customer interrupts keeps
-            // generating, finishes a few seconds later, and still gets
-            // spoken — landing on top of the reply to the interruption itself
-            // and sounding like the assistant is talking over/repeating
-            // itself instead of actually listening. Only sent when a
-            // response is actually active — otherwise OpenAI returns a
-            // "response_cancel_not_active" error (harmless, but noisy).
+            // Barge-in: bump the generation so any further audio deltas for
+            // the response that was just interrupted get dropped instead of
+            // forwarded, and clear whatever Twilio already has queued to
+            // play. OpenAI's own server-side turn detection independently
+            // auto-cancels the in-flight response — response.cancel here is
+            // just a backstop for cases it doesn't, guarded so we don't spam
+            // "no active response" errors when it already has.
             playbackGeneration++;
-            responseTextBuffer = "";
+            transcriptBuffer = "";
             if (streamSid) {
               twilioWs.send(JSON.stringify({ event: "clear", streamSid }));
             }
@@ -410,18 +432,7 @@ export async function GET() {
             finalizeCall(
               "CALL_FAILED",
               "Call automatically ended after reaching the 3-minute limit without the AI calling end_call."
-            ).then(() => {
-              try {
-                openaiWs?.close();
-              } catch {
-                // already closed
-              }
-              try {
-                twilioWs.close();
-              } catch {
-                // already closed
-              }
-            });
+            ).then(closeConnections);
           }, MAX_CALL_MS);
 
           Promise.all([

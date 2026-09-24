@@ -1,18 +1,14 @@
-import { getAgentSettings } from "@/lib/agentSettings";
-import { listVoices } from "@/lib/elevenlabs";
+import { getAgentSettings, OPENAI_VOICES } from "@/lib/agentSettings";
 import { AgentSettingsForm } from "@/components/AgentSettingsForm";
 
-// Must always reflect the latest saved settings and current ElevenLabs voice
-// list, not a build-time snapshot — without this, Next statically prerenders
-// this page (no dynamic APIs used) and router.refresh() after Save would
-// keep showing stale data until the next deploy.
+// Must always reflect the latest saved settings, not a build-time snapshot —
+// without this, Next statically prerenders this page (no dynamic APIs used)
+// and router.refresh() after Save would keep showing stale data until the
+// next deploy.
 export const dynamic = "force-dynamic";
 
 export default async function AgentSettingsPage() {
-  const [settings, voices] = await Promise.all([
-    getAgentSettings(),
-    listVoices().catch(() => []),
-  ]);
+  const settings = await getAgentSettings();
 
   return (
     <div className="flex flex-col gap-6">
@@ -28,18 +24,12 @@ export default async function AgentSettingsPage() {
 
       <AgentSettingsForm
         initialSettings={{
-          voiceId: settings.voiceId,
-          voiceName: settings.voiceName,
-          voiceStability: settings.voiceStability,
-          voiceSimilarityBoost: settings.voiceSimilarityBoost,
-          voiceStyle: settings.voiceStyle,
-          voiceSpeakerBoost: settings.voiceSpeakerBoost,
-          voiceSpeed: settings.voiceSpeed,
+          openaiVoice: settings.openaiVoice,
           openingLine: settings.openingLine,
           voicemailMessage: settings.voicemailMessage,
           additionalContext: settings.additionalContext,
         }}
-        voices={voices}
+        voices={OPENAI_VOICES}
       />
     </div>
   );

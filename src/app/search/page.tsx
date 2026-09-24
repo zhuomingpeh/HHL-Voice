@@ -62,6 +62,7 @@ export default async function SearchPage({
                   <th className="px-4 py-2 font-normal">Phone</th>
                   <th className="px-4 py-2 font-normal">Batch</th>
                   <th className="px-4 py-2 font-normal">Last outcome</th>
+                  <th className="px-4 py-2 font-normal">Transcript</th>
                 </tr>
               </thead>
               <tbody>
@@ -75,6 +76,15 @@ export default async function SearchPage({
                       </a>
                     </td>
                     <td className="px-4 py-2">{callOutcomeLabel(r.calls[0]?.outcome)}</td>
+                    <td className="px-4 py-2">
+                      {r.calls[0] ? (
+                        <a href={`/calls/${r.calls[0].id}`} className="underline">
+                          View
+                        </a>
+                      ) : (
+                        <span className="text-neutral-400">—</span>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

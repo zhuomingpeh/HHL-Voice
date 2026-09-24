@@ -121,6 +121,7 @@ export default async function BatchDetailPage({
               <th className="px-4 py-2 font-normal">Valid</th>
               <th className="px-4 py-2 font-normal">Last call outcome</th>
               <th className="px-4 py-2 font-normal">Promise to pay</th>
+              <th className="px-4 py-2 font-normal">Transcript</th>
               <th className="px-4 py-2 font-normal">Call</th>
             </tr>
           </thead>
@@ -151,6 +152,15 @@ export default async function BatchDetailPage({
                         ? r.calls[0].promiseToPayNormalized.toLocaleDateString()
                         : r.calls[0].promiseToPayRaw}
                     </span>
+                  ) : (
+                    <span className="text-neutral-400">—</span>
+                  )}
+                </td>
+                <td className="px-4 py-2">
+                  {r.calls[0] ? (
+                    <a href={`/calls/${r.calls[0].id}`} className="text-neutral-900 underline">
+                      View
+                    </a>
                   ) : (
                     <span className="text-neutral-400">—</span>
                   )}

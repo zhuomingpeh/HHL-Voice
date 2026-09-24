@@ -49,6 +49,11 @@ export async function GET() {
     let hardTimeout: ReturnType<typeof setTimeout> | null = null;
     const transcript: TranscriptEntry[] = [];
     const bufferedMedia: string[] = [];
+    // The customer's audio is withheld from OpenAI until the opening line
+    // has fully finished — see the comment on openingLineTimeout below for
+    // why. Everything that arrives before then queues here instead.
+    let openingLineDone = false;
+    let openingLineTimeout: ReturnType<typeof setTimeout> | null = null;
     let transcriptBuffer = "";
     // Bumped on every barge-in. Each response's audio is tagged with the
     // generation active when it started (currentResponseGeneration); if a
@@ -231,6 +236,16 @@ export async function GET() {
       const ws = new WebSocket(OPENAI_REALTIME_URL, { headers: { Authorization: `Bearer ${apiKey}` } });
       openaiWs = ws;
 
+      function finishOpeningLine() {
+        if (openingLineDone) return;
+        openingLineDone = true;
+        if (openingLineTimeout) clearTimeout(openingLineTimeout);
+        for (const payload of bufferedMedia) {
+          ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio: payload }));
+        }
+        bufferedMedia.length = 0;
+      }
+
       ws.on("open", () => {
         const outstandingAmount = record!.outstandingAmount != null ? Number(record!.outstandingAmount) : null;
 
@@ -278,13 +293,20 @@ export async function GET() {
         // systemPrompt.ts) rather than fixed Twilio <Say> TwiML — trigger it
         // immediately so the call doesn't just sit in silence waiting for
         // the customer to speak first.
+        //
+        // Deliberately NOT forwarding customer audio yet (see finishOpeningLine
+        // above / the "media" handler below). A real call showed OpenAI's own
+        // server-side turn detection cancelling this very first response the
+        // instant it heard ANYTHING from the customer's line — even just
+        // "hello?" on pickup, which is completely normal — and retrying
+        // several times before the opening line got through, taking 5-10s
+        // and coming out in confusing fragments. Customer audio is queued
+        // instead and only released to the model once the opening line has
+        // actually finished (or a timeout fires, in case something goes
+        // wrong) — after that, normal real-time listening/interruption
+        // applies for the rest of the call as usual.
         ws.send(JSON.stringify({ type: "response.create" }));
-
-        // Flush any caller audio that arrived while we were still connecting.
-        for (const payload of bufferedMedia) {
-          ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio: payload }));
-        }
-        bufferedMedia.length = 0;
+        openingLineTimeout = setTimeout(finishOpeningLine, 8000);
       });
 
       ws.on("message", (raw) => {
@@ -338,6 +360,7 @@ export async function GET() {
           }
           case "response.done": {
             responseActive = false;
+            if (!openingLineDone) finishOpeningLine();
             // Diagnostic: a response with no output at all (no audio, no
             // function call) means the model produced nothing for that
             // turn — surfaced as "the AI just went silent" on a real call.
@@ -458,7 +481,7 @@ export async function GET() {
         case "media": {
           const media = msg.media as { payload?: string } | undefined;
           if (!media?.payload) break;
-          if (openaiWs && openaiWs.readyState === WebSocket.OPEN) {
+          if (openaiWs && openaiWs.readyState === WebSocket.OPEN && openingLineDone) {
             openaiWs.send(JSON.stringify({ type: "input_audio_buffer.append", audio: media.payload }));
           } else {
             bufferedMedia.push(media.payload);

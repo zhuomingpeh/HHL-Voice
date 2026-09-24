@@ -54,6 +54,8 @@ export async function GET() {
     // why. Everything that arrives before then queues here instead.
     let openingLineDone = false;
     let openingLineTimeout: ReturnType<typeof setTimeout> | null = null;
+    let openingLineAttempts = 0;
+    let mediaEventCount = 0;
     let transcriptBuffer = "";
     // Bumped on every barge-in. Each response's audio is tagged with the
     // generation active when it started (currentResponseGeneration); if a
@@ -240,6 +242,7 @@ export async function GET() {
         if (openingLineDone) return;
         openingLineDone = true;
         if (openingLineTimeout) clearTimeout(openingLineTimeout);
+        console.log(`[media-stream] opening line finished, flushing ${bufferedMedia.length} buffered media frames`);
         for (const payload of bufferedMedia) {
           ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio: payload }));
         }
@@ -360,13 +363,35 @@ export async function GET() {
           }
           case "response.done": {
             responseActive = false;
-            if (!openingLineDone) finishOpeningLine();
             // Diagnostic: a response with no output at all (no audio, no
             // function call) means the model produced nothing for that
             // turn — surfaced as "the AI just went silent" on a real call.
             const response = event.response as { output?: unknown[] } | undefined;
-            if (!response?.output || response.output.length === 0) {
+            const hadOutput = Boolean(response?.output && response.output.length > 0);
+            if (!hadOutput) {
               console.error("[media-stream] response.done with empty output — model said nothing", JSON.stringify(event.response));
+            }
+            if (!openingLineDone) {
+              // A previous bug here called finishOpeningLine() on ANY first
+              // response.done, including an empty/cancelled one — which
+              // released buffered customer audio before the opening line had
+              // actually played, letting that audio trigger MORE cancellations
+              // of the (still-unplayed) opening line. Only release once a
+              // response has genuinely produced audio; otherwise retry.
+              if (spokeThisResponse || hadOutput) {
+                finishOpeningLine();
+              } else {
+                openingLineAttempts++;
+                console.error(`[media-stream] opening line attempt ${openingLineAttempts} produced nothing, retrying`);
+                if (openingLineAttempts < 6 && ws.readyState === WebSocket.OPEN) {
+                  ws.send(JSON.stringify({ type: "response.create" }));
+                } else {
+                  // Give up retrying rather than risk hanging the call — the
+                  // 8s safety timeout would otherwise still catch this, but
+                  // no reason to wait that long once retries are exhausted.
+                  finishOpeningLine();
+                }
+              }
             }
             const resolvers = pendingResponseDoneResolvers;
             pendingResponseDoneResolvers = [];
@@ -481,8 +506,13 @@ export async function GET() {
         case "media": {
           const media = msg.media as { payload?: string } | undefined;
           if (!media?.payload) break;
-          if (openaiWs && openaiWs.readyState === WebSocket.OPEN && openingLineDone) {
-            openaiWs.send(JSON.stringify({ type: "input_audio_buffer.append", audio: media.payload }));
+          mediaEventCount++;
+          const forwarding = Boolean(openaiWs && openaiWs.readyState === WebSocket.OPEN && openingLineDone);
+          if (mediaEventCount <= 15) {
+            console.log(`[media-stream] media frame #${mediaEventCount}: openingLineDone=${openingLineDone} forwarding=${forwarding}`);
+          }
+          if (forwarding) {
+            openaiWs!.send(JSON.stringify({ type: "input_audio_buffer.append", audio: media.payload }));
           } else {
             bufferedMedia.push(media.payload);
             if (bufferedMedia.length > 1000) bufferedMedia.shift(); // defensive cap

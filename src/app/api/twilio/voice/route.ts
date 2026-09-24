@@ -1,23 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { buildTwilioMediaStreamUrl, isValidTwilioRequest } from "@/lib/twilio";
+import { getAgentSettings } from "@/lib/agentSettings";
 
 function escapeXml(value: string): string {
   return value.replace(/&/g, "&amp;");
 }
 
-// Scripted, deterministic — not left to the AI to say. Twilio's own TTS
-// plays this immediately on answer, which also buys time in the background
-// for the OpenAI Realtime connection to finish setting up before it
-// actually needs to listen for a reply.
-// Plain "HHL" (no letter-spelling SSML) — spelling it out was judged too
-// slow-sounding; a plain acronym reads fine.
-const OPENING_SCRIPT = "Hi this is HHL Credit, your payment is due today. Will payment be made today?";
-
-function connectStreamTwiml(streamUrl: string, callId: string) {
+// Opening line and voicemail message are staff-editable (dashboard →
+// Agent settings, src/app/api/settings/agent/route.ts) rather than hardcoded
+// here. Both are played via Twilio's own TTS, not the AI — scripted,
+// deterministic, and (for the opening line) buys time in the background for
+// the OpenAI Realtime connection to finish setting up before it actually
+// needs to listen for a reply.
+function connectStreamTwiml(streamUrl: string, callId: string, openingLine: string) {
   const xml =
     `<?xml version="1.0" encoding="UTF-8"?><Response>` +
-    `<Say voice="Polly.Amy-Generative">${escapeXml(OPENING_SCRIPT)}</Say>` +
+    `<Say voice="Polly.Amy-Generative">${escapeXml(openingLine)}</Say>` +
     `<Connect><Stream url="${escapeXml(streamUrl)}">` +
     `<Parameter name="callId" value="${escapeXml(callId)}" /></Stream></Connect></Response>`;
   return new NextResponse(xml, { headers: { "Content-Type": "text/xml" } });
@@ -27,11 +26,8 @@ function connectStreamTwiml(streamUrl: string, callId: string) {
 // identity with. Left as a one-way message, not a live AI conversation:
 // trying to have the realtime AI improvise against an answering machine's
 // own prompts/beep is exactly what caused the mid-sentence cutoff bug.
-const VOICEMAIL_MESSAGE =
-  "Hi, this is an automated call from HHL Credit regarding a payment reminder. Please call us back at your convenience. Thank you.";
-
-function voicemailTwiml() {
-  const xml = `<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="Polly.Amy-Generative">${escapeXml(VOICEMAIL_MESSAGE)}</Say><Hangup/></Response>`;
+function voicemailTwiml(voicemailMessage: string) {
+  const xml = `<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="Polly.Amy-Generative">${escapeXml(voicemailMessage)}</Say><Hangup/></Response>`;
   return new NextResponse(xml, { headers: { "Content-Type": "text/xml" } });
 }
 
@@ -70,10 +66,12 @@ export async function POST(req: NextRequest) {
       // fail the call itself over a bookkeeping miss.
     });
 
+  const settings = await getAgentSettings();
+
   if (isMachine) {
-    return voicemailTwiml();
+    return voicemailTwiml(settings.voicemailMessage);
   }
 
   const streamUrl = buildTwilioMediaStreamUrl("/api/twilio/media-stream");
-  return connectStreamTwiml(streamUrl, callId);
+  return connectStreamTwiml(streamUrl, callId, settings.openingLine);
 }

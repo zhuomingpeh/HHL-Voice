@@ -4,8 +4,9 @@ import { prisma } from "@/lib/prisma";
 import { buildSystemPrompt } from "@/lib/systemPrompt";
 import { REALTIME_TOOLS } from "@/lib/realtimeTools";
 import { CALL_OUTCOME_KEYS } from "@/lib/callOutcomes";
-import { streamTextToSpeech } from "@/lib/elevenlabs";
-import type { Prisma, CustomerRecord } from "@prisma/client";
+import { streamTextToSpeech, type VoiceSettings } from "@/lib/elevenlabs";
+import { getAgentSettings } from "@/lib/agentSettings";
+import type { Prisma, CustomerRecord, AgentSettings } from "@prisma/client";
 
 export const maxDuration = 300;
 
@@ -14,7 +15,12 @@ export const maxDuration = 300;
 // backstop in case it doesn't.
 const MAX_CALL_MS = 3 * 60 * 1000;
 
-const OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime?model=gpt-realtime";
+// gpt-realtime-2.1-mini: distilled reasoning model, tool use + function
+// calling, ~1/3 the cost of full gpt-realtime-2.1. Our script is a simple
+// 4-branch decision, not open-ended reasoning, so the mini tier is the right
+// fit — bump to gpt-realtime-2.1 only if live testing shows it mishandling
+// branch selection or tool-call timing.
+const OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime?model=gpt-realtime-2.1-mini";
 
 interface TranscriptEntry {
   role: string;
@@ -32,6 +38,7 @@ export async function GET() {
     let streamSid: string | null = null;
     let callId: string | null = null;
     let record: CustomerRecord | null = null;
+    let agentSettings: AgentSettings | null = null;
     let openaiWs: WebSocket | null = null;
     let callEnded = false;
     let hardTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -54,16 +61,24 @@ export async function GET() {
 
     async function speak(text: string) {
       if (!text.trim() || !streamSid) return;
-      const voiceId = process.env.ELEVENLABS_VOICE_ID;
+      const voiceId = agentSettings?.voiceId || process.env.ELEVENLABS_VOICE_ID;
       if (!voiceId) {
-        console.error("[media-stream] ELEVENLABS_VOICE_ID is not set");
+        console.error("[media-stream] no ElevenLabs voice configured (agent settings or ELEVENLABS_VOICE_ID)");
         return;
       }
+      const voiceSettings: VoiceSettings | undefined = agentSettings
+        ? {
+            stability: agentSettings.voiceStability,
+            similarityBoost: agentSettings.voiceSimilarityBoost,
+            style: agentSettings.voiceStyle,
+            speakerBoost: agentSettings.voiceSpeakerBoost,
+          }
+        : undefined;
       logTranscript("assistant", text);
 
       const myGeneration = playbackGeneration;
       try {
-        const stream = await streamTextToSpeech(voiceId, text);
+        const stream = await streamTextToSpeech(voiceId, text, voiceSettings);
         for await (const chunk of stream as unknown as AsyncIterable<Uint8Array>) {
           if (myGeneration !== playbackGeneration) break; // barged in — stop playing
           if (twilioWs.readyState !== WebSocket.OPEN) break;
@@ -198,7 +213,7 @@ export async function GET() {
             type: "session.update",
             session: {
               type: "realtime",
-              model: "gpt-realtime",
+              model: "gpt-realtime-2.1-mini",
               // Text only — OpenAI still does the listening/understanding
               // and all tool-calling, but speaking is handled by ElevenLabs
               // (the user's cloned voice) instead of gpt-realtime's own
@@ -218,6 +233,7 @@ export async function GET() {
                 name: record!.name,
                 dueDate: record!.dueDate,
                 outstandingAmount,
+                openingLine: agentSettings?.openingLine ?? "",
               }),
               tools: REALTIME_TOOLS,
             },
@@ -353,15 +369,18 @@ export async function GET() {
             });
           }, MAX_CALL_MS);
 
-          prisma.call
-            .findUnique({ where: { id: callId }, include: { customerRecord: true } })
-            .then((call) => {
+          Promise.all([
+            prisma.call.findUnique({ where: { id: callId }, include: { customerRecord: true } }),
+            getAgentSettings(),
+          ])
+            .then(([call, settings]) => {
               if (!call) {
                 console.error("[media-stream] call not found", callId);
                 twilioWs.close();
                 return;
               }
               record = call.customerRecord;
+              agentSettings = settings;
               connectToOpenAi();
             })
             .catch((err) => {

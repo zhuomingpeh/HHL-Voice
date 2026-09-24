@@ -39,6 +39,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             <a href="/search" className="text-neutral-600 hover:text-neutral-900">
               Search
             </a>
+            <a href="/agent-settings" className="text-neutral-600 hover:text-neutral-900">
+              Agent settings
+            </a>
             <span className="ml-auto">
               <LogoutButton />
             </span>

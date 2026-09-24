@@ -127,6 +127,35 @@ model Call {
   @@index([twilioCallSid])
 }
 
+// Singleton row (fixed id) holding the AI caller's configurable voice + script
+// text, editable from the dashboard. Deliberately narrow: the compliance-
+// critical branch logic and strict rules (no negotiation, no invented
+// amounts, escalate-when-upset, etc.) stay hardcoded in src/lib/systemPrompt.ts
+// rather than becoming free text here — only the caller-facing wording and
+// voice tuning are meant to be staff-editable.
+model AgentSettings {
+  id String @id @default("singleton")
+
+  // ElevenLabs voice + tuning. voiceId defaults to ELEVENLABS_VOICE_ID (the
+  // cloned voice) the first time settings are read — see src/lib/agentSettings.ts.
+  voiceId              String
+  voiceName            String?
+  voiceStability       Float   @default(0.5)
+  voiceSimilarityBoost Float   @default(0.75)
+  voiceStyle           Float   @default(0)
+  voiceSpeakerBoost    Boolean @default(true)
+
+  // Caller-facing script text. openingLine is played as fixed Twilio <Say>
+  // TwiML before the AI connects (see voice/route.ts) and is also quoted
+  // back to the model in its system prompt so it knows what was already
+  // said; voicemailMessage plays as a one-way message when AMD detects a
+  // machine.
+  openingLine      String @default("Hi this is HHL Credit, your payment is due today. Will payment be made today?")
+  voicemailMessage String @default("Hi, this is an automated call from HHL Credit regarding a payment reminder. Please call us back at your convenience. Thank you.")
+
+  updatedAt DateTime @updatedAt
+}
+
 enum CallbackTaskStatus {
   OPEN
   COMPLETED

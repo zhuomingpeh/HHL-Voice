@@ -19,6 +19,43 @@ export interface CloneVoiceResult {
   voiceId: string;
 }
 
+export interface VoiceSettings {
+  stability: number;
+  similarityBoost: number;
+  style: number;
+  speakerBoost: boolean;
+}
+
+export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
+  // Tuned against the user's real cloned voice sample — default ElevenLabs
+  // settings sounded rougher/less natural.
+  stability: 0.5,
+  similarityBoost: 0.75,
+  style: 0,
+  speakerBoost: true,
+};
+
+export interface VoiceSummary {
+  voiceId: string;
+  name: string;
+  category: string;
+}
+
+/** Lists voices available to this ElevenLabs account (cloned + library). */
+export async function listVoices(): Promise<VoiceSummary[]> {
+  const res = await fetch(`${ELEVENLABS_BASE_URL}/v2/voices?page_size=100`, {
+    headers: { "xi-api-key": getApiKey() },
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`ElevenLabs list voices failed (${res.status}): ${body}`);
+  }
+  const data = (await res.json()) as {
+    voices: { voice_id: string; name: string; category: string }[];
+  };
+  return data.voices.map((v) => ({ voiceId: v.voice_id, name: v.name, category: v.category }));
+}
+
 /**
  * Creates an Instant Voice Clone from an audio sample.
  * @param audioBuffer Raw audio file bytes (mp3/wav/etc, 30s-5min recommended)
@@ -58,7 +95,8 @@ export async function cloneVoice(
  */
 export async function streamTextToSpeech(
   voiceId: string,
-  text: string
+  text: string,
+  voiceSettings: VoiceSettings = DEFAULT_VOICE_SETTINGS
 ): Promise<ReadableStream<Uint8Array>> {
   const res = await fetch(
     `${ELEVENLABS_BASE_URL}/v1/text-to-speech/${voiceId}/stream?output_format=ulaw_8000`,
@@ -71,13 +109,11 @@ export async function streamTextToSpeech(
       body: JSON.stringify({
         text,
         model_id: "eleven_multilingual_v2", // supports English/Mandarin
-        // Tuned against the user's real cloned voice sample — default
-        // settings sounded rougher/less natural.
         voice_settings: {
-          stability: 0.5,
-          similarity_boost: 0.75,
-          style: 0,
-          use_speaker_boost: true,
+          stability: voiceSettings.stability,
+          similarity_boost: voiceSettings.similarityBoost,
+          style: voiceSettings.style,
+          use_speaker_boost: voiceSettings.speakerBoost,
         },
       }),
     }
@@ -89,4 +125,44 @@ export async function streamTextToSpeech(
   }
 
   return res.body;
+}
+
+/**
+ * Same synthesis, but as a standalone mp3 for playback in a browser
+ * <audio> element — used for the "preview this voice" button in the
+ * dashboard settings page. Telephony calls use streamTextToSpeech (ulaw_8000)
+ * instead; mp3 isn't compatible with Twilio Media Streams.
+ */
+export async function previewTextToSpeech(
+  voiceId: string,
+  text: string,
+  voiceSettings: VoiceSettings = DEFAULT_VOICE_SETTINGS
+): Promise<ArrayBuffer> {
+  const res = await fetch(
+    `${ELEVENLABS_BASE_URL}/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`,
+    {
+      method: "POST",
+      headers: {
+        "xi-api-key": getApiKey(),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        text,
+        model_id: "eleven_multilingual_v2",
+        voice_settings: {
+          stability: voiceSettings.stability,
+          similarity_boost: voiceSettings.similarityBoost,
+          style: voiceSettings.style,
+          use_speaker_boost: voiceSettings.speakerBoost,
+        },
+      }),
+    }
+  );
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`ElevenLabs TTS preview failed (${res.status}): ${body}`);
+  }
+
+  return res.arrayBuffer();
 }
